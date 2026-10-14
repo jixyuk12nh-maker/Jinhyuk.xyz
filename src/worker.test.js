@@ -63,7 +63,7 @@ test("unexpected errors return JSON 500 for API routes", async () => {
   env.DB.prepare = () => { throw new Error("boom"); };
   const res = await login(env, "198.51.100.88");
   assert.equal(res.status, 500);
-  assert.equal((await res.json()).error, "Internal server error.");
+  assert.equal((await res.json()).error, "서버 내부 오류가 발생했습니다.");
 });
 
 test("PBKDF2 stays within the 100,000 iteration cap Cloudflare Workers enforce", () => {
@@ -86,7 +86,7 @@ test("the owner email wrong code and non-owner emails with a code all get the sa
   const a = await signup(env, "owner@example.com", { ownerSetupCode: "wrong" }, "203.0.113.20");
   const b = await signup(env, "someone@example.com", { ownerSetupCode: SECRET }, "203.0.113.21");
   const c = await signup(env, "someone@example.com", { inviteCode: "wrong" }, "203.0.113.22");
-  for (const res of [a, b, c]) { assert.equal(res.status, 403); assert.equal((await res.json()).error, "Invalid invite or setup code."); }
+  for (const res of [a, b, c]) { assert.equal(res.status, 403); assert.equal((await res.json()).error, "초대 코드 또는 설정 코드가 올바르지 않습니다."); }
   assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
 });
 
@@ -214,7 +214,7 @@ test("admins cannot block other admins; only the owner can", async () => {
   const cookie = await unlock(env);
   const res = await worker.fetch(req("/api/admin/users/ADM02/block", { method: "POST", headers: { Cookie: cookie }, body: {} }), env);
   assert.equal(res.status, 403);
-  assert.match((await res.json()).error, /owner/i);
+  assert.match((await res.json()).error, /소유자/);
 });
 
 test("blacklist: bad %-encoding gives 400, and the owner cannot block their own IP", async () => {
@@ -258,4 +258,25 @@ test("obfuscation size limits depend on the mode and are enforced before compili
   const ok = await post("198.51.100.103", { source: "print('hi')", mode: "vm" });
   assert.equal(ok.status, 200);
   assert.equal(typeof (await ok.json()).output, "string");
+});
+
+test("accounts created before the 5-character ID change can still be managed by admins", async () => {
+  const legacyId = "9f2c1a7e4b6d8031a5c7e9f0";
+  const env = adminEnv("owner", (sql) => (/SELECT id,role FROM users WHERE id=\?/.test(sql) ? { id: legacyId, role: "user" } : undefined));
+  const cookie = await unlock(env);
+  const res = await worker.fetch(req(`/api/admin/users/${legacyId}/block`, { method: "POST", headers: { Cookie: cookie }, body: {} }), env);
+  assert.equal(res.status, 200);
+});
+
+test("oversized JSON bodies still return 413 after the error messages were localised", async () => {
+  const env = fakeEnv({ first: asUser("user") });
+  const res = await worker.fetch(req("/api/scripts", { method: "POST", headers: { Cookie: SESSION }, body: { name: "a.lua", source: "x".repeat(1_200_000) } }), env);
+  assert.equal(res.status, 413);
+});
+
+test("the CSP allows the Google Fonts used by the home page", async () => {
+  const env = fakeEnv({ ASSETS: { fetch: async () => new Response("<html></html>", { headers: { "Content-Type": "text/html; charset=utf-8" } }) } });
+  const csp = (await worker.fetch(req("/"), env)).headers.get("content-security-policy");
+  assert.match(csp, /style-src [^;]*https:\/\/fonts\.googleapis\.com/);
+  assert.match(csp, /font-src [^;]*https:\/\/fonts\.gstatic\.com/);
 });

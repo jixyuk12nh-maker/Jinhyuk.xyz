@@ -58,7 +58,7 @@ async function passwordHash(password, salt = randomToken(16)) {
 }
 async function bodyJson(request, max = 2_000_000) {
   try { return JSON.parse(await readBoundedText(request, max) || "{}"); }
-  catch (e) { throw new Error(e?.tooLarge ? "Request body too large." : "Invalid JSON."); }
+  catch (e) { const err = new Error(e?.tooLarge ? "요청 본문이 너무 큽니다." : "JSON 형식이 올바르지 않습니다."); err.tooLarge = Boolean(e?.tooLarge); throw err; }
 }
 function cookieValue(request, name) {
   const cookies = request.headers.get("Cookie") || "";
@@ -91,7 +91,7 @@ async function newUserId(db) {
     const found = await db.prepare("SELECT id FROM users WHERE id=? LIMIT 1").bind(id).first();
     if (!found) return id;
   }
-  throw new Error("Could not allocate a unique user ID. Please retry.");
+  throw new Error("고유 사용자 ID를 만들지 못했습니다. 다시 시도하세요.");
 }
 function clientIp(request) {
   return String(request.headers.get("cf-connecting-ip") || "").trim().slice(0, 64).toLowerCase() || "unknown";
@@ -142,7 +142,7 @@ async function countFailures(env, event, { ip, reason }) {
     return Number(row?.count) || 0;
   } catch { return 0; }
 }
-const tooManyAttempts = () => json({ error: "Too many failed attempts. Try again in 15 minutes." }, 429, { "Retry-After": "900" });
+const tooManyAttempts = () => json({ error: "실패 횟수가 너무 많습니다. 15분 후 다시 시도하세요." }, 429, { "Retry-After": "900" });
 async function isIpBlacklisted(env, ip) {
   try { return Boolean(await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first()); } catch { return false; }
 }
@@ -158,34 +158,34 @@ async function api(request, env, url) {
   const path = url.pathname, method = request.method;
   if (!["GET", "HEAD", "OPTIONS"].includes(method) && path !== "/api/obfuscate") {
     const origin = request.headers.get("Origin");
-    if (origin && origin !== url.origin) return json({ error: "Cross-origin requests are not allowed." }, 403);
+    if (origin && origin !== url.origin) return json({ error: "다른 출처의 요청은 허용되지 않습니다." }, 403);
   }
   if (path === "/api/health" && method === "GET") return json({ ok: true, service: "jinhyuk.xyz", database: Boolean(env.DB) });
 
   if (path === "/api/auth/signup" && method === "POST") {
-    if (!env.DB) return json({ error: "Database is not configured. Create and bind D1 as DB." }, 503);
+    if (!env.DB) return json({ error: "데이터베이스가 설정되지 않았습니다. D1을 만들어 DB로 연결하세요." }, 503);
     const ip = clientIp(request);
     if (await countFailures(env, "signup", { ip }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || ""), invite = String(data.inviteCode || ""), ownerSetupCode = String(data.ownerSetupCode || "");
-    if (!validEmail(email)) return json({ error: "Enter a valid email address." }, 400);
-    if (password.length < 10 || password.length > 200) return json({ error: "Password must be 10–200 characters." }, 400);
-    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "Invalid invite or setup code." }, 403); }
+    if (!validEmail(email)) return json({ error: "올바른 이메일 주소를 입력하세요." }, 400);
+    if (password.length < 10 || password.length > 200) return json({ error: "비밀번호는 10~200자여야 합니다." }, 400);
+    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
     // The owner/developer code is only valid together with OWNER_EMAIL. The owner email cannot be
     // registered without it, and the code is rejected for every other email. The error is the same
     // in every case so it never reveals which email is the owner's.
     const ownerEmail = String(env.OWNER_EMAIL || "").trim().toLowerCase();
     const isOwnerEmail = Boolean(ownerEmail) && email === ownerEmail;
     const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && ownerSetupCode !== "" && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
-    if ((isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "Invalid invite or setup code." }, 403); }
+    if ((isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
     const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
-    if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
+    if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "이미 가입된 이메일입니다." }, 409); }
     const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
     const role = isOwnerEmail && ownerCodeOk ? "owner" : "user";
     try {
       await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active", ip, now).run();
     } catch (e) {
-      if (/UNIQUE|constraint/i.test(String(e?.message))) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
+      if (/UNIQUE|constraint/i.test(String(e?.message))) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "이미 가입된 이메일입니다." }, 409); }
       throw e;
     }
     await logAccess(env, request, "signup", "success", `user_id=${id}`);
@@ -194,19 +194,19 @@ async function api(request, env, url) {
   }
 
   if (path === "/api/auth/login" && method === "POST") {
-    if (!env.DB) return json({ error: "Database is not configured." }, 503);
+    if (!env.DB) return json({ error: "데이터베이스가 설정되지 않았습니다." }, 503);
     const ip = clientIp(request);
     if (await countFailures(env, "login", { ip }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || "");
     const user = await env.DB.prepare("SELECT id,email,password_salt,password_hash,role,status FROM users WHERE email=? LIMIT 1").bind(email).first();
-    if (!user) { await passwordHash(password, DUMMY_SALT); await logAccess(env, request, "login", "failed", "Email not found"); return json({ error: "Email or password is incorrect." }, 401); }
+    if (!user) { await passwordHash(password, DUMMY_SALT); await logAccess(env, request, "login", "failed", "Email not found"); return json({ error: "이메일 또는 비밀번호가 올바르지 않습니다." }, 401); }
     const failReason = `Incorrect password;user_id=${user.id}`;
     if (await countFailures(env, "login", { reason: failReason }) >= MAX_FAILS_PER_ACCOUNT) return tooManyAttempts();
     const check = await passwordHash(password, user.password_salt);
-    if (!safeEqual(check.hash, user.password_hash)) { await logAccess(env, request, "login", "failed", failReason); return json({ error: "Email or password is incorrect." }, 401); }
+    if (!safeEqual(check.hash, user.password_hash)) { await logAccess(env, request, "login", "failed", failReason); return json({ error: "이메일 또는 비밀번호가 올바르지 않습니다." }, 401); }
     // Only someone who knows the password learns that the account is blocked.
-    if (user.status === "blocked") { await logAccess(env, request, "login", "blocked", `user_id=${user.id}`); return json({ error: "This account is blocked." }, 403); }
+    if (user.status === "blocked") { await logAccess(env, request, "login", "blocked", `user_id=${user.id}`); return json({ error: "차단된 계정입니다." }, 403); }
     const now = Date.now();
     await env.DB.prepare("UPDATE users SET last_ip=?,last_login_at=? WHERE id=?").bind(ip, now, user.id).run();
     await logAccess(env, request, "login", "success", `user_id=${user.id}`);
@@ -224,14 +224,14 @@ async function api(request, env, url) {
 
   const publicLoaderMatch = path.match(/^\/api\/loader\/([a-f0-9]+)$/);
   if (publicLoaderMatch && method === "GET") {
-    if (!env.DB) return json({ error: "Database is not configured." }, 503);
+    if (!env.DB) return json({ error: "데이터베이스가 설정되지 않았습니다." }, 503);
     const auth = request.headers.get("Authorization") || "";
     const apiKey = auth.startsWith("Bearer ") ? auth.slice(7) : request.headers.get("x-api-key") || "";
-    if (!apiKey) return json({ error: "API key required." }, 401);
+    if (!apiKey) return json({ error: "API 키가 필요합니다." }, 401);
     const keyRow = await env.DB.prepare("SELECT api_keys.user_id AS user_id, api_keys.id AS id FROM api_keys JOIN users ON users.id=api_keys.user_id WHERE api_keys.key_hash=? AND api_keys.revoked_at IS NULL AND users.status<>'blocked' LIMIT 1").bind(await sha256(apiKey)).first();
-    if (!keyRow) return json({ error: "Invalid API key." }, 401);
+    if (!keyRow) return json({ error: "API 키가 올바르지 않습니다." }, 401);
     const script = await env.DB.prepare("SELECT name,source FROM scripts WHERE id=? AND user_id=? LIMIT 1").bind(publicLoaderMatch[1], keyRow.user_id).first();
-    if (!script) return json({ error: "Script not found." }, 404);
+    if (!script) return json({ error: "스크립트를 찾을 수 없습니다." }, 404);
     await env.DB.prepare("UPDATE api_keys SET last_used_at=? WHERE id=?").bind(Date.now(), keyRow.id).run();
     return new Response(script.source, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
   }
@@ -240,21 +240,21 @@ async function api(request, env, url) {
   if (path === "/api/me" && method === "GET") return user ? json({ authenticated: true, id: user.id, email: user.email, role: user.role || "user", isAdmin: ["owner", "admin"].includes(user.role), isOwner: user.role === "owner", session: Boolean(user.session) }) : json({ authenticated: false }, 401);
 
   if (path === "/api/admin" || path.startsWith("/api/admin/")) {
-    if (!user || !user.session) return json({ error: "Sign in with an account session first." }, 401);
-    if (!env.DB) return json({ error: "Database is not configured." }, 503);
-    if (!["owner", "admin"].includes(user.role)) return json({ error: "Developer Studio access denied." }, 403);
+    if (!user || !user.session) return json({ error: "먼저 계정으로 로그인하세요." }, 401);
+    if (!env.DB) return json({ error: "데이터베이스가 설정되지 않았습니다." }, 503);
+    if (!["owner", "admin"].includes(user.role)) return json({ error: "개발자 스튜디오 접근이 거부되었습니다." }, 403);
     if (path === "/api/admin/status" && method === "GET") return json({ unlocked: await devUnlocked(request, env), configured: Boolean(env.OWNER_SETUP_CODE) });
     if (path === "/api/admin/unlock" && method === "POST") {
-      if (!env.OWNER_SETUP_CODE) return json({ error: "OWNER_SETUP_CODE is not configured on the server." }, 503);
+      if (!env.OWNER_SETUP_CODE) return json({ error: "서버에 OWNER_SETUP_CODE가 설정되어 있지 않습니다." }, 503);
       const ip = clientIp(request), reason = `user_id=${user.id}`;
       if (await countFailures(env, "dev_unlock", { ip }) >= MAX_FAILS_PER_IP || await countFailures(env, "dev_unlock", { reason }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
       let data; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
-      if (!safeEqual(String(data.code || ""), env.OWNER_SETUP_CODE)) { await logAccess(env, request, "dev_unlock", "failed", reason); return json({ error: "Incorrect developer code." }, 403); }
+      if (!safeEqual(String(data.code || ""), env.OWNER_SETUP_CODE)) { await logAccess(env, request, "dev_unlock", "failed", reason); return json({ error: "개발자 코드가 올바르지 않습니다." }, 403); }
       await logAccess(env, request, "dev_unlock", "success", reason);
       const value = await devCookieValue(env, request, Date.now() + DEV_UNLOCK_MS);
       return json({ ok: true }, 200, { "Set-Cookie": `lm_dev=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${DEV_UNLOCK_MS / 1000}` });
     }
-    if (!(await devUnlocked(request, env))) return json({ error: "Developer code required.", needsUnlock: true }, 403);
+    if (!(await devUnlocked(request, env))) return json({ error: "개발자 코드가 필요합니다.", needsUnlock: true }, 403);
     if (path === "/api/admin/overview" && method === "GET") {
       const [users, visitors, blocked, logs] = await Promise.all([
         env.DB.prepare("SELECT COUNT(*) AS count FROM users").first(),
@@ -276,15 +276,15 @@ async function api(request, env, url) {
       const rows = await env.DB.prepare("SELECT ip,reason,created_at,created_by FROM ip_blacklist ORDER BY created_at DESC LIMIT 500").all();
       return json({ blacklist: rows.results || [] });
     }
-    const userMatch = path.match(/^\/api\/admin\/users\/([A-Za-z0-9]{5})\/(block|unblock|promote|demote)$/);
+    const userMatch = path.match(/^\/api\/admin\/users\/([A-Za-z0-9_-]{1,64})\/(block|unblock|promote|demote)$/);
     if (userMatch && method === "POST") {
       const [, targetId, action] = userMatch;
       const target = await env.DB.prepare("SELECT id,role FROM users WHERE id=? LIMIT 1").bind(targetId).first();
-      if (!target) return json({ error: "User not found." }, 404);
-      if (target.role === "owner") return json({ error: "Owner account cannot be modified here." }, 403);
-      if (target.role === "admin" && user.role !== "owner") return json({ error: "Only the owner can modify administrators." }, 403);
-      if (["promote", "demote"].includes(action) && user.role !== "owner") return json({ error: "Only the owner can manage administrators." }, 403);
-      if (target.id === user.id && ["block", "demote"].includes(action)) return json({ error: "You cannot block or demote yourself." }, 400);
+      if (!target) return json({ error: "사용자를 찾을 수 없습니다." }, 404);
+      if (target.role === "owner") return json({ error: "소유자 계정은 여기서 변경할 수 없습니다." }, 403);
+      if (target.role === "admin" && user.role !== "owner") return json({ error: "관리자 계정은 소유자만 변경할 수 있습니다." }, 403);
+      if (["promote", "demote"].includes(action) && user.role !== "owner") return json({ error: "관리자 지정·해제는 소유자만 할 수 있습니다." }, 403);
+      if (target.id === user.id && ["block", "demote"].includes(action)) return json({ error: "자기 자신을 차단하거나 권한을 해제할 수 없습니다." }, 400);
       if (action === "block") await env.DB.prepare("UPDATE users SET status='blocked' WHERE id=?").bind(targetId).run();
       if (action === "unblock") await env.DB.prepare("UPDATE users SET status='active' WHERE id=?").bind(targetId).run();
       if (action === "promote") await env.DB.prepare("UPDATE users SET role='admin' WHERE id=? AND role='user'").bind(targetId).run();
@@ -294,47 +294,47 @@ async function api(request, env, url) {
       return json({ ok: true });
     }
     if (path === "/api/admin/blacklist" && method === "POST") {
-      if (user.role !== "owner") return json({ error: "Only the owner can change the IP blacklist." }, 403);
+      if (user.role !== "owner") return json({ error: "IP 블랙리스트는 소유자만 변경할 수 있습니다." }, 403);
       let data; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
       const ip = String(data.ip || "").trim().toLowerCase();
-      if (!ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip) || ip === "unknown") return json({ error: "Enter a valid IPv4 or IPv6 address." }, 400);
-      if (ip === clientIp(request)) return json({ error: "You cannot block your own current IP address." }, 400);
+      if (!ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip) || ip === "unknown") return json({ error: "올바른 IPv4 또는 IPv6 주소를 입력하세요." }, 400);
+      if (ip === clientIp(request)) return json({ error: "현재 접속 중인 내 IP는 차단할 수 없습니다." }, 400);
       await env.DB.prepare("INSERT INTO ip_blacklist (ip,reason,created_at,created_by) VALUES (?,?,?,?) ON CONFLICT(ip) DO UPDATE SET reason=excluded.reason,created_at=excluded.created_at,created_by=excluded.created_by").bind(ip, String(data.reason || "Manual block").slice(0,200), Date.now(), user.id).run();
       await logAccess(env, request, "admin_ip_block", "success", `actor=${user.id};ip=${ip}`);
       return json({ ok: true }, 201);
     }
     const unblack = path.match(/^\/api\/admin\/blacklist\/(.+)$/);
     if (unblack && method === "DELETE") {
-      if (user.role !== "owner") return json({ error: "Only the owner can change the IP blacklist." }, 403);
-      let ip; try { ip = decodeURIComponent(unblack[1]); } catch { return json({ error: "Invalid IP address." }, 400); }
+      if (user.role !== "owner") return json({ error: "IP 블랙리스트는 소유자만 변경할 수 있습니다." }, 403);
+      let ip; try { ip = decodeURIComponent(unblack[1]); } catch { return json({ error: "올바르지 않은 IP 주소입니다." }, 400); }
       await env.DB.prepare("DELETE FROM ip_blacklist WHERE ip=?").bind(ip).run();
       await logAccess(env, request, "admin_ip_unblock", "success", `actor=${user.id};ip=${ip}`);
       return json({ ok: true });
     }
-    return json({ error: "Not found." }, 404);
+    return json({ error: "찾을 수 없습니다." }, 404);
   }
 
   if (path === "/api/obfuscate" && method === "POST") {
     const clientKey = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "unknown";
-    if (isRateLimited(clientKey)) return json({ error: "Too many requests. Please slow down and try again shortly." }, 429, { "Retry-After": "30" });
-    if (!(request.headers.get("content-type") || "").toLowerCase().includes("application/json")) return json({ error: "Content-Type must be application/json." }, 415);
+    if (isRateLimited(clientKey)) return json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." }, 429, { "Retry-After": "30" });
+    if (!(request.headers.get("content-type") || "").toLowerCase().includes("application/json")) return json({ error: "Content-Type은 application/json이어야 합니다." }, 415);
     const declaredLength = Number(request.headers.get("content-length") || 0);
-    if (declaredLength > MAX_REQUEST_BYTES) return json({ error: "Request too large. Maximum request size is 4 MiB." }, 413);
-    let data; try { data = await bodyJson(request, MAX_REQUEST_BYTES); } catch (e) { return json({ error: e.message }, e.message.includes("large") ? 413 : 400); }
-    if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "Enter source code first." }, 400);
-    if (data.language !== undefined && !["lua", "luau"].includes(data.language)) return json({ error: "Language must be either lua or luau." }, 400);
+    if (declaredLength > MAX_REQUEST_BYTES) return json({ error: "요청이 너무 큽니다. 최대 4 MiB까지 가능합니다." }, 413);
+    let data; try { data = await bodyJson(request, MAX_REQUEST_BYTES); } catch (e) { return json({ error: e.message }, e.tooLarge ? 413 : 400); }
+    if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "먼저 소스 코드를 입력하세요." }, 400);
+    if (data.language !== undefined && !["lua", "luau"].includes(data.language)) return json({ error: "language는 lua 또는 luau여야 합니다." }, 400);
     const mode = data.mode === "vm" ? "vm" : "compatibility";
-    if (new TextEncoder().encode(data.source).byteLength > MAX_SOURCE_BYTES[mode]) return json({ error: `Source is too large for ${mode === "vm" ? "VM" : "compatibility"} mode (limit ${formatLimit(MAX_SOURCE_BYTES[mode])}).` }, 413);
+    if (new TextEncoder().encode(data.source).byteLength > MAX_SOURCE_BYTES[mode]) return json({ error: `소스가 너무 큽니다. ${mode === "vm" ? "VM" : "호환성"} 모드 한도는 ${formatLimit(MAX_SOURCE_BYTES[mode])}입니다.` }, 413);
     try {
       const language = data.language === "luau" ? "luau" : "lua";
       const output = mode === "vm" ? compileLuaVm(data.source, { language }) : compileLuaSubset(data.source, { language, renameLocals: true });
-      return json({ output, language, mode, note: mode === "vm" ? "Experimental VM mode. Validate output in your exact target runtime; it may run slower and does not support every Luau feature." : "Compatibility mode transforms eligible strings/comments and conservatively renames locals. It is not full VM virtualization." });
-    } catch (e) { return json({ error: e?.message || "Compilation failed." }, 400); }
+      return json({ output, language, mode, note: mode === "vm" ? "실험적 VM 모드입니다. 실제 실행 환경에서 반드시 테스트하세요. 실행이 느려질 수 있고 모든 Luau 기능을 지원하지는 않습니다." : "호환성 모드는 변환 가능한 문자열과 주석을 처리하고 지역 변수 이름을 보수적으로 바꿉니다. 완전한 VM 가상화는 아닙니다." });
+    } catch (e) { return json({ error: e?.message || "변환에 실패했습니다." }, 400); }
   }
 
-  if (!user) return json({ error: "Sign in first." }, 401);
-  if (!user.session) return json({ error: "This operation requires a browser session. API keys cannot manage accounts or issue other keys." }, 403);
-  if (!env.DB) return json({ error: "Database is not configured. Bind D1 as DB." }, 503);
+  if (!user) return json({ error: "먼저 로그인하세요." }, 401);
+  if (!user.session) return json({ error: "이 작업은 브라우저 로그인 세션이 필요합니다. API 키로는 계정 관리나 키 발급을 할 수 없습니다." }, 403);
+  if (!env.DB) return json({ error: "데이터베이스가 설정되지 않았습니다. D1을 DB로 연결하세요." }, 503);
 
   if (path === "/api/keys" && method === "GET") {
     const rows = await env.DB.prepare("SELECT id,label,created_at,last_used_at,revoked_at FROM api_keys WHERE user_id=? ORDER BY created_at DESC").bind(user.id).all();
@@ -342,16 +342,16 @@ async function api(request, env, url) {
   }
   if (path === "/api/keys" && method === "POST") {
     const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM api_keys WHERE user_id=? AND revoked_at IS NULL").bind(user.id).first();
-    if ((count?.count || 0) >= 5) return json({ error: "You can have up to 5 active API keys." }, 409);
+    if ((count?.count || 0) >= 5) return json({ error: "활성 API 키는 최대 5개까지 만들 수 있습니다." }, 409);
     let data = {}; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
     const key = `lm_${randomToken(24)}`, id = randomToken(12), now = Date.now();
-    await env.DB.prepare("INSERT INTO api_keys (id,user_id,key_hash,label,created_at) VALUES (?,?,?,?,?)").bind(id, user.id, await sha256(key), String(data.label || "Default key").slice(0, 80), now).run();
-    return json({ ok: true, key: { id, label: String(data.label || "Default key").slice(0,80), created_at: now }, secret: key }, 201);
+    await env.DB.prepare("INSERT INTO api_keys (id,user_id,key_hash,label,created_at) VALUES (?,?,?,?,?)").bind(id, user.id, await sha256(key), String(data.label || "기본 키").slice(0, 80), now).run();
+    return json({ ok: true, key: { id, label: String(data.label || "기본 키").slice(0,80), created_at: now }, secret: key }, 201);
   }
   const keyMatch = path.match(/^\/api\/keys\/([a-f0-9]+)$/);
   if (keyMatch && method === "DELETE") {
     const result = await env.DB.prepare("UPDATE api_keys SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL").bind(Date.now(), keyMatch[1], user.id).run();
-    return result.meta?.changes ? json({ ok: true }) : json({ error: "Key not found." }, 404);
+    return result.meta?.changes ? json({ ok: true }) : json({ error: "키를 찾을 수 없습니다." }, 404);
   }
 
   if (path === "/api/scripts" && method === "GET") {
@@ -359,12 +359,12 @@ async function api(request, env, url) {
     return json({ scripts: rows.results || [] });
   }
   if (path === "/api/scripts" && method === "POST") {
-    let data; try { data = await bodyJson(request, 1_100_000); } catch (e) { return json({ error: e.message }, e.message.includes("large") ? 413 : 400); }
-    if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "Source code is required." }, 400);
+    let data; try { data = await bodyJson(request, 1_100_000); } catch (e) { return json({ error: e.message }, e.tooLarge ? 413 : 400); }
+    if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "소스 코드가 필요합니다." }, 400);
     const size = new TextEncoder().encode(data.source).byteLength;
-    if (size > 900_000) return json({ error: "Saved scripts are limited to 900 KB per file." }, 413);
+    if (size > 900_000) return json({ error: "저장 스크립트는 파일당 최대 900 KB입니다." }, 413);
     const owned = await env.DB.prepare("SELECT COUNT(*) AS count FROM scripts WHERE user_id=?").bind(user.id).first();
-    if ((Number(owned?.count) || 0) >= MAX_SCRIPTS_PER_USER) return json({ error: `You can store up to ${MAX_SCRIPTS_PER_USER} scripts. Delete one first.` }, 409);
+    if ((Number(owned?.count) || 0) >= MAX_SCRIPTS_PER_USER) return json({ error: `스크립트는 최대 ${MAX_SCRIPTS_PER_USER}개까지 저장할 수 있습니다. 먼저 하나를 삭제하세요.` }, 409);
     const id = randomToken(12), now = Date.now(), name = safeName(data.name);
     await env.DB.prepare("INSERT INTO scripts (id,user_id,name,source,size,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").bind(id, user.id, name, data.source, size, now, now).run();
     return json({ ok: true, script: { id, name, size, created_at: now } }, 201);
@@ -372,13 +372,13 @@ async function api(request, env, url) {
   const scriptMatch = path.match(/^\/api\/scripts\/([a-f0-9]+)$/);
   if (scriptMatch && method === "GET") {
     const row = await env.DB.prepare("SELECT id,name,source,size,created_at,updated_at FROM scripts WHERE id=? AND user_id=?").bind(scriptMatch[1], user.id).first();
-    return row ? json({ script: row }) : json({ error: "Script not found." }, 404);
+    return row ? json({ script: row }) : json({ error: "스크립트를 찾을 수 없습니다." }, 404);
   }
   if (scriptMatch && method === "DELETE") {
     const result = await env.DB.prepare("DELETE FROM scripts WHERE id=? AND user_id=?").bind(scriptMatch[1], user.id).run();
-    return result.meta?.changes ? json({ ok: true }) : json({ error: "Script not found." }, 404);
+    return result.meta?.changes ? json({ ok: true }) : json({ error: "스크립트를 찾을 수 없습니다." }, 404);
   }
-  return json({ error: "Not found." }, 404);
+  return json({ error: "찾을 수 없습니다." }, 404);
 }
 
 const STATIC_FILE = /\.(?!html$)[a-z0-9]+$/i;
@@ -410,7 +410,7 @@ function shouldLogPage(ip) {
 }
 const PLAIN = { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" };
 
-const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 function withSecurityHeaders(response) {
   const res = new Response(response.body, response);
   const h = res.headers;
@@ -430,7 +430,7 @@ async function handle(request, env, ctx) {
   // The IP blacklist applies to pages and to every API route (except the health check).
   if (env.DB && url.pathname !== "/api/health" && (isApi || isPage) && await isIpBlacklisted(env, ip)) {
     if (shouldLogPage(ip)) defer(ctx, logAccess(env, request, url.pathname === "/api/auth/login" ? "login" : url.pathname === "/api/auth/signup" ? "signup" : isApi ? "api" : "page", "blocked", "IP is blacklisted"));
-    return isApi ? json({ error: "This IP address is blocked." }, 403) : new Response("Access denied", { status: 403, headers: PLAIN });
+    return isApi ? json({ error: "차단된 IP 주소입니다." }, 403) : new Response("접근이 거부되었습니다.", { status: 403, headers: PLAIN });
   }
   if (isApi) return api(request, env, url);
   if (env.DB && isPage && shouldLogPage(ip)) {
@@ -451,8 +451,8 @@ export default {
     catch (e) {
       console.error("Unhandled error:", e);
       const body = new URL(request.url).pathname.startsWith("/api/")
-        ? json({ error: "Internal server error." }, 500)
-        : new Response("Internal server error", { status: 500, headers: PLAIN });
+        ? json({ error: "서버 내부 오류가 발생했습니다." }, 500)
+        : new Response("서버 내부 오류가 발생했습니다.", { status: 500, headers: PLAIN });
       return withSecurityHeaders(body);
     }
   }
