@@ -1,4 +1,4 @@
-name: Test LuaMoon
+name: Test jinhyuk.xyz
 on:
   push:
   pull_request:
