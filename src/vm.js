@@ -999,7 +999,7 @@ class Compiler {
     this.emit(fs, "EQ");
     const stepOk = this.emit(fs, "JMPF", 0);
     this.emit(fs, "GETG", this.constant(fs, "error"));
-    this.emit(fs, "PUSHK", this.constant(fs, "LuaMoon VM: 'for' step is zero"));
+    this.emit(fs, "PUSHK", this.constant(fs, "jinhyuk.xyz VM: 'for' step is zero"));
     this.emit(fs, "CALL", 1);
     this.emit(fs, "POP");
     this.patch(fs, stepOk, this.here(fs));
@@ -1341,7 +1341,7 @@ elseif o=="BAND" then local y=pop() local x=pop() push(bitop(x,y,bfAnd))
 elseif o=="BOR" then local y=pop() local x=pop() push(bitop(x,y,bfOr))
 elseif o=="BXOR" then local y=pop() local x=pop() push(bitop(x,y,bfXor))
 elseif o=="BNOT" then local x=pop() push(bitop(x,4294967295,bfXor))
-else error("LuaMoon VM: invalid opcode",0)
+else error("jinhyuk.xyz VM: invalid opcode",0)
 end
 end
 end
@@ -1415,7 +1415,7 @@ end
 return b*65536+a
 end
 if _cksum(_KW,_VA,_VB)~=_VC or _cksum(_D,_DA,_DB)~=_DC then
-error("LuaMoon VM: integrity check failed",0)
+error("jinhyuk.xyz VM: integrity check failed",0)
 end
 local function _u(s)
 local M={}
@@ -1461,13 +1461,13 @@ for i=1,#b do o[i]=string.char(_bx(b[i],k)) end
 return table.concat(o)
 end
 local _loader=loadstring or load
-if type(_loader)~="function" then error("LuaMoon VM: dynamic code loading is unavailable",0) end
+if type(_loader)~="function" then error("jinhyuk.xyz VM: dynamic code loading is unavailable",0) end
 local _dataChunk,_dataErr=_loader(_un(_D,_Q))
-if not _dataChunk then error(_dataErr or "LuaMoon VM: data initialization failed",0) end
+if not _dataChunk then error(_dataErr or "jinhyuk.xyz VM: data initialization failed",0) end
 local _DATA=_dataChunk()
 local _src=_dk(_u(_KW))
 local _chunk,_err=_loader(_src)
-if not _chunk then error(_err or "LuaMoon VM: failed to initialize",0) end
+if not _chunk then error(_err or "jinhyuk.xyz VM: failed to initialize",0) end
 return _chunk()(_DATA,(getfenv and getfenv() or _G),...)
 end)(...)
 `;
