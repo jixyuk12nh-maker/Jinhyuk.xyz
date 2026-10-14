@@ -19,7 +19,6 @@ function fakeEnv({ first = () => null, ...extra } = {}) {
   return {
     DB: { prepare: statement, batch: async () => [] },
     ASSETS: { fetch: async () => new Response("asset") },
-    INVITE_CODE: "invite-code",
     writes, reads,
     ...extra
   };
@@ -31,7 +30,7 @@ const req = (path, { method = "GET", ip = "203.0.113.1", headers = {}, body } = 
     body: body ? JSON.stringify(body) : undefined
   });
 const signup = (env, email, extra = {}, ip = "203.0.113.10") =>
-  worker.fetch(req("/api/auth/signup", { method: "POST", ip, body: { email, password: "correct-horse-battery", inviteCode: "invite-code", ...extra } }), env);
+  worker.fetch(req("/api/auth/signup", { method: "POST", ip, body: { email, password: "correct-horse-battery", ...extra } }), env);
 const login = (env, ip, email = "x@example.com") =>
   worker.fetch(req("/api/auth/login", { method: "POST", ip, body: { email, password: "wrong-password" } }), env);
 
@@ -73,36 +72,27 @@ test("PBKDF2 stays within the 100,000 iteration cap Cloudflare Workers enforce",
   assert.equal(/iterations:\s*\d{4,}/.test(src), false, "no hard-coded iteration count may bypass the constant");
 });
 
-// ---------- signup / owner code ----------
-test("the owner email cannot be registered without the owner code", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "Owner@Example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "owner@example.com");
-  assert.equal(res.status, 403);
-  assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
-});
-
-test("the owner email wrong code and non-owner emails with a code all get the same generic error", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const a = await signup(env, "owner@example.com", { ownerSetupCode: "wrong" }, "203.0.113.20");
-  const b = await signup(env, "someone@example.com", { ownerSetupCode: SECRET }, "203.0.113.21");
-  const c = await signup(env, "someone@example.com", { inviteCode: "wrong" }, "203.0.113.22");
-  for (const res of [a, b, c]) { assert.equal(res.status, 403); assert.equal((await res.json()).error, "초대 코드 또는 설정 코드가 올바르지 않습니다."); }
-  assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
-});
-
-test("the owner email with the correct owner code becomes owner", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "owner@example.com", { ownerSetupCode: SECRET }, "203.0.113.11");
+// ---------- signup / first account becomes owner ----------
+test("signup works without any invite code or owner code configured", async () => {
+  const env = fakeEnv();
+  const res = await signup(env, "someone@example.com");
   assert.equal(res.status, 201);
-  assert.ok(env.writes.find((w) => /INSERT INTO users/.test(w.sql)).args.includes("owner"));
+  assert.ok(env.writes.some((w) => /INSERT INTO users/.test(w.sql)));
 });
 
-test("an ordinary signup (no owner code) creates a normal user", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "someone@example.com", {}, "203.0.113.12");
+test("the first account becomes owner and later accounts become users, decided atomically in SQL", async () => {
+  const env = fakeEnv();
+  await signup(env, "someone@example.com");
+  const insert = env.writes.find((w) => /INSERT INTO users/.test(w.sql));
+  assert.match(insert.sql, /CASE WHEN EXISTS \(SELECT 1 FROM users\) THEN 'user' ELSE 'owner' END/);
+});
+
+test("a client cannot choose its own role at signup", async () => {
+  const env = fakeEnv();
+  const res = await signup(env, "someone@example.com", { role: "owner", ownerSetupCode: SECRET, inviteCode: "x" });
   assert.equal(res.status, 201);
   const insert = env.writes.find((w) => /INSERT INTO users/.test(w.sql));
-  assert.ok(insert.args.includes("user") && !insert.args.includes("owner"));
+  assert.ok(!insert.args.includes("owner") && !insert.args.includes(SECRET));
 });
 
 test("signup locks an IP after repeated failures (shared across Worker instances via D1)", async () => {

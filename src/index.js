@@ -167,23 +167,14 @@ async function api(request, env, url) {
     const ip = clientIp(request);
     if (await countFailures(env, "signup", { ip }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
-    const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || ""), invite = String(data.inviteCode || ""), ownerSetupCode = String(data.ownerSetupCode || "");
+    const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || "");
     if (!validEmail(email)) return json({ error: "올바른 이메일 주소를 입력하세요." }, 400);
     if (password.length < 10 || password.length > 200) return json({ error: "비밀번호는 10~200자여야 합니다." }, 400);
-    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
-    // The owner/developer code is only valid together with OWNER_EMAIL. The owner email cannot be
-    // registered without it, and the code is rejected for every other email. The error is the same
-    // in every case so it never reveals which email is the owner's.
-    const ownerEmail = String(env.OWNER_EMAIL || "").trim().toLowerCase();
-    const isOwnerEmail = Boolean(ownerEmail) && email === ownerEmail;
-    const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && ownerSetupCode !== "" && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
-    if ((isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
     const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
     if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "이미 가입된 이메일입니다." }, 409); }
     const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
-    const role = isOwnerEmail && ownerCodeOk ? "owner" : "user";
     try {
-      await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active", ip, now).run();
+      await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) SELECT ?,?,?,?,?,CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'user' ELSE 'owner' END,'active',?,?").bind(id, email, salt, hash, now, ip, now).run();
     } catch (e) {
       if (/UNIQUE|constraint/i.test(String(e?.message))) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "이미 가입된 이메일입니다." }, 409); }
       throw e;
