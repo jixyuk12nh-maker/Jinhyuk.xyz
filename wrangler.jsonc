@@ -11,7 +11,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "jinhyuk.xyz-DB",
+      "database_name": "jinhyuk.xyz",
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
