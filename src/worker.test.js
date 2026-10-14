@@ -74,6 +74,28 @@ test("PBKDF2 stays within the 100,000 iteration cap Cloudflare Workers enforce",
 });
 
 // ---------- signup / owner code ----------
+test("the very first signup bootstraps an owner account without an invite code", async () => {
+  const env = fakeEnv({ first: (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 0 } : null) });
+  const res = await signup(env, "first@example.com", { inviteCode: "" }, "203.0.113.40");
+  assert.equal(res.status, 201);
+  const insert = env.writes.find((w) => /INSERT INTO users/.test(w.sql));
+  assert.ok(insert, "expected an INSERT INTO users");
+  assert.equal(insert.args[5], "owner");
+});
+
+test("once any account exists, signup requires the invite code again (bootstrap window is closed)", async () => {
+  const env = fakeEnv({ first: (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 1 } : null) });
+  const res = await signup(env, "second@example.com", { inviteCode: "" }, "203.0.113.41");
+  assert.equal(res.status, 403);
+  assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
+});
+
+test("if the user-count check itself fails, bootstrap stays off and the invite code is still required", async () => {
+  const env = fakeEnv({ first: (sql) => { if (/COUNT\(\*\) AS count FROM users/.test(sql)) throw new Error("boom"); return /COUNT\(\*\)/.test(sql) ? { count: 0 } : null; } });
+  const res = await signup(env, "third@example.com", { inviteCode: "" }, "203.0.113.42");
+  assert.equal(res.status, 403);
+});
+
 test("the owner email cannot be registered without the owner code", async () => {
   const env = fakeEnv({ OWNER_EMAIL: "Owner@Example.com", OWNER_SETUP_CODE: SECRET });
   const res = await signup(env, "owner@example.com");
@@ -215,6 +237,37 @@ test("admins cannot block other admins; only the owner can", async () => {
   const res = await worker.fetch(req("/api/admin/users/ADM02/block", { method: "POST", headers: { Cookie: cookie }, body: {} }), env);
   assert.equal(res.status, 403);
   assert.match((await res.json()).error, /소유자/);
+});
+
+// ---------- owner-only account creation (no invite code) ----------
+test("the owner can create an account directly from the admin panel without an invite code", async () => {
+  const env = adminEnv("owner");
+  const cookie = await unlock(env);
+  const res = await worker.fetch(req("/api/admin/users", { method: "POST", headers: { Cookie: cookie }, body: { email: "new@example.com", password: "correct-horse-battery", role: "user" } }), env);
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.user.email, "new@example.com");
+  assert.equal(body.user.role, "user");
+  assert.ok(env.writes.some((w) => /INSERT INTO users/.test(w.sql)));
+});
+
+test("an admin (not owner) cannot create accounts", async () => {
+  const env = adminEnv("admin");
+  const cookie = await unlock(env);
+  const res = await worker.fetch(req("/api/admin/users", { method: "POST", headers: { Cookie: cookie }, body: { email: "new@example.com", password: "correct-horse-battery" } }), env);
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).error, /소유자/);
+});
+
+test("owner-created accounts still reject a duplicate email or a too-short password", async () => {
+  const env = adminEnv("owner");
+  const cookie = await unlock(env);
+  const short = await worker.fetch(req("/api/admin/users", { method: "POST", headers: { Cookie: cookie }, body: { email: "new@example.com", password: "short" } }), env);
+  assert.equal(short.status, 400);
+  const taken = fakeEnv({ first: asUser("owner", (sql) => (/SELECT id FROM users WHERE email=\?/.test(sql) ? { id: "EXIST1" } : undefined)), OWNER_SETUP_CODE: SECRET });
+  const takenCookie = await unlock(taken);
+  const dup = await worker.fetch(req("/api/admin/users", { method: "POST", headers: { Cookie: takenCookie }, body: { email: "taken@example.com", password: "correct-horse-battery" } }), taken);
+  assert.equal(dup.status, 409);
 });
 
 test("blacklist: bad %-encoding gives 400, and the owner cannot block their own IP", async () => {
