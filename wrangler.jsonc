@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "luamoon",
+  "name": "jinhyuk-xyz",
   "main": "src/index.js",
   "compatibility_date": "2026-10-13",
   "assets": {
@@ -11,8 +11,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "jinhyuk_xyz",
-      "database_id": "69941f3a-a5d7-42d8-ad00-ba0fa8b6ec53",
+      "database_name": "jinhyuk.xyz-DB",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ]
