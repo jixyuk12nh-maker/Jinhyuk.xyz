@@ -1,7 +1,18 @@
 import { compileLuaSubset, compileLuaVm } from "./compiler.js";
 
-const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 55 * 1024 * 1024;
+// A Worker isolate has ~128 MB of memory. Measured: compatibility mode needs roughly 50x the
+// input size in memory and VM mode several hundred x, so the old 50 MiB limit could never work
+// and let one anonymous request crash the isolate. These limits keep each request inside it.
+const MAX_SOURCE_BYTES = { compatibility: 2 * 1024 * 1024, vm: 128 * 1024 };
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+// Cloudflare Workers reject PBKDF2 with more than 100,000 iterations (NotSupportedError).
+const PBKDF2_ITERATIONS = 100000;
+const FAIL_WINDOW_MS = 15 * 60_000;
+const MAX_FAILS_PER_IP = 5;
+const MAX_FAILS_PER_ACCOUNT = 10;
+const MAX_SESSIONS_PER_USER = 10;
+const MAX_SCRIPTS_PER_USER = 30;
+const DEV_UNLOCK_MS = 60 * 60_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const rateBuckets = new Map();
@@ -42,7 +53,7 @@ function randomToken(bytes = 32) { const b = crypto.getRandomValues(new Uint8Arr
 async function sha256(value) { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, "0")).join(""); }
 async function passwordHash(password, salt = randomToken(16)) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: 150000, hash: "SHA-256" }, key, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" }, key, 256);
   return { salt, hash: [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, "0")).join("") };
 }
 async function bodyJson(request, max = 2_000_000) {
@@ -83,7 +94,7 @@ async function newUserId(db) {
   throw new Error("Could not allocate a unique user ID. Please retry.");
 }
 function clientIp(request) {
-  return String(request.headers.get("cf-connecting-ip") || "").trim().slice(0, 64) || "unknown";
+  return String(request.headers.get("cf-connecting-ip") || "").trim().slice(0, 64).toLowerCase() || "unknown";
 }
 async function logAccess(env, request, event, outcome, reason = "") {
   if (!env.DB) return;
@@ -103,27 +114,72 @@ function safeEqual(a, b) {
 }
 function safeName(name) { return String(name || "script.lua").replace(/[\r\n\\/\0]/g, "_").slice(0, 120) || "script.lua"; }
 
+async function hmacHex(secret, message) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return [...new Uint8Array(sig)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+// Developer Studio unlock: a signed, short-lived cookie bound to the current login session.
+async function devCookieValue(env, request, exp) {
+  const session = await sha256(cookieValue(request, "lm_session"));
+  return `${exp}.${await hmacHex("dev-unlock:" + env.OWNER_SETUP_CODE, `${session}.${exp}`)}`;
+}
+async function devUnlocked(request, env) {
+  if (!env.OWNER_SETUP_CODE) return false;
+  const raw = cookieValue(request, "lm_dev"), dot = raw.indexOf(".");
+  if (dot < 1) return false;
+  const exp = Number(raw.slice(0, dot));
+  if (!Number.isFinite(exp) || exp < Date.now()) return false;
+  return safeEqual(raw, await devCookieValue(env, request, exp));
+}
+// Failed attempts are counted from access_logs, so the limit is shared by every Worker instance.
+async function countFailures(env, event, { ip, reason }) {
+  try {
+    const since = Date.now() - FAIL_WINDOW_MS;
+    const row = reason
+      ? await env.DB.prepare("SELECT COUNT(*) AS count FROM access_logs WHERE event=? AND outcome='failed' AND reason=? AND created_at>?").bind(event, reason, since).first()
+      : await env.DB.prepare("SELECT COUNT(*) AS count FROM access_logs WHERE ip=? AND event=? AND outcome='failed' AND created_at>?").bind(ip, event, since).first();
+    return Number(row?.count) || 0;
+  } catch { return 0; }
+}
+const tooManyAttempts = () => json({ error: "Too many failed attempts. Try again in 15 minutes." }, 429, { "Retry-After": "900" });
+async function isIpBlacklisted(env, ip) {
+  try { return Boolean(await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first()); } catch { return false; }
+}
+async function createSession(env, userId, now = Date.now()) {
+  const token = randomToken();
+  await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)").bind(await sha256(token), userId, now, now + 14 * 86400000).run();
+  try { await env.DB.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT ?)").bind(userId, userId, MAX_SESSIONS_PER_USER).run(); } catch {}
+  return token;
+}
+function formatLimit(bytes) { return bytes >= 1048576 ? `${bytes / 1048576} MiB` : `${bytes / 1024} KiB`; }
+
 async function api(request, env, url) {
   const path = url.pathname, method = request.method;
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && path !== "/api/obfuscate") {
+    const origin = request.headers.get("Origin");
+    if (origin && origin !== url.origin) return json({ error: "Cross-origin requests are not allowed." }, 403);
+  }
   if (path === "/api/health" && method === "GET") return json({ ok: true, service: "jinhyuk.xyz", database: Boolean(env.DB) });
 
   if (path === "/api/auth/signup" && method === "POST") {
     if (!env.DB) return json({ error: "Database is not configured. Create and bind D1 as DB." }, 503);
-    if (isRateLimited("signup:" + clientIp(request), 10)) return json({ error: "Too many attempts. Please wait a minute and try again." }, 429, { "Retry-After": "60" });
+    const ip = clientIp(request);
+    if (await countFailures(env, "signup", { ip }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || ""), invite = String(data.inviteCode || ""), ownerSetupCode = String(data.ownerSetupCode || "");
     if (!validEmail(email)) return json({ error: "Enter a valid email address." }, 400);
     if (password.length < 10 || password.length > 200) return json({ error: "Password must be 10–200 characters." }, 400);
-    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) return json({ error: "Invalid invite code." }, 403);
-    const ip = clientIp(request);
-    const blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first();
-    if (blocked) { await logAccess(env, request, "signup", "blocked", "IP is blacklisted"); return json({ error: "This IP address is blocked." }, 403); }
-    const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
-    if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
+    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "Invalid invite or setup code." }, 403); }
+    // The owner/developer code is only valid together with OWNER_EMAIL. The owner email cannot be
+    // registered without it, and the code is rejected for every other email. The error is the same
+    // in every case so it never reveals which email is the owner's.
     const ownerEmail = String(env.OWNER_EMAIL || "").trim().toLowerCase();
     const isOwnerEmail = Boolean(ownerEmail) && email === ownerEmail;
-    const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
-    if (isOwnerEmail && !ownerCodeOk) { await logAccess(env, request, "signup", "failed", "Owner email without valid setup code"); return json({ error: "This email is reserved for the site owner. Enter the owner setup code." }, 403); }
+    const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && ownerSetupCode !== "" && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
+    if ((isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "Invalid invite or setup code." }, 403); }
+    const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
+    if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
     const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
     const role = isOwnerEmail && ownerCodeOk ? "owner" : "user";
     try {
@@ -133,35 +189,37 @@ async function api(request, env, url) {
       throw e;
     }
     await logAccess(env, request, "signup", "success", `user_id=${id}`);
-    const token = randomToken(), tokenHash = await sha256(token);
-    await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)").bind(tokenHash, id, now, now + 14 * 86400000).run();
+    const token = await createSession(env, id, now);
     return json({ ok: true, user: { id, email } }, 201, { "Set-Cookie": sessionCookie(token) });
   }
 
   if (path === "/api/auth/login" && method === "POST") {
     if (!env.DB) return json({ error: "Database is not configured." }, 503);
+    const ip = clientIp(request);
+    if (await countFailures(env, "login", { ip }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || "");
-    const ip = clientIp(request);
-    if (isRateLimited("login:" + ip, 10)) return json({ error: "Too many login attempts. Please wait a minute and try again." }, 429, { "Retry-After": "60" });
-    const blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first();
-    if (blocked) { await logAccess(env, request, "login", "blocked", "IP is blacklisted"); return json({ error: "This IP address is blocked." }, 403); }
     const user = await env.DB.prepare("SELECT id,email,password_salt,password_hash,role,status FROM users WHERE email=? LIMIT 1").bind(email).first();
     if (!user) { await passwordHash(password, DUMMY_SALT); await logAccess(env, request, "login", "failed", "Email not found"); return json({ error: "Email or password is incorrect." }, 401); }
-    if (user.status === "blocked") { await logAccess(env, request, "login", "blocked", `user_id=${user.id}`); return json({ error: "This account is blocked." }, 403); }
+    const failReason = `Incorrect password;user_id=${user.id}`;
+    if (await countFailures(env, "login", { reason: failReason }) >= MAX_FAILS_PER_ACCOUNT) return tooManyAttempts();
     const check = await passwordHash(password, user.password_salt);
-    if (!safeEqual(check.hash, user.password_hash)) { await logAccess(env, request, "login", "failed", "Incorrect password"); return json({ error: "Email or password is incorrect." }, 401); }
-    const token = randomToken(), now = Date.now();
+    if (!safeEqual(check.hash, user.password_hash)) { await logAccess(env, request, "login", "failed", failReason); return json({ error: "Email or password is incorrect." }, 401); }
+    // Only someone who knows the password learns that the account is blocked.
+    if (user.status === "blocked") { await logAccess(env, request, "login", "blocked", `user_id=${user.id}`); return json({ error: "This account is blocked." }, 403); }
+    const now = Date.now();
     await env.DB.prepare("UPDATE users SET last_ip=?,last_login_at=? WHERE id=?").bind(ip, now, user.id).run();
     await logAccess(env, request, "login", "success", `user_id=${user.id}`);
-    await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)").bind(await sha256(token), user.id, now, now + 14 * 86400000).run();
+    const token = await createSession(env, user.id, now);
     return json({ ok: true, user: { id: user.id, email: user.email } }, 200, { "Set-Cookie": sessionCookie(token) });
   }
 
   if (path === "/api/auth/logout" && method === "POST") {
     const token = cookieValue(request, "lm_session");
     if (env.DB && token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await sha256(token)).run();
-    return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
+    const res = json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
+    res.headers.append("Set-Cookie", "lm_dev=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0");
+    return res;
   }
 
   const publicLoaderMatch = path.match(/^\/api\/loader\/([a-f0-9]+)$/);
@@ -185,6 +243,18 @@ async function api(request, env, url) {
     if (!user || !user.session) return json({ error: "Sign in with an account session first." }, 401);
     if (!env.DB) return json({ error: "Database is not configured." }, 503);
     if (!["owner", "admin"].includes(user.role)) return json({ error: "Developer Studio access denied." }, 403);
+    if (path === "/api/admin/status" && method === "GET") return json({ unlocked: await devUnlocked(request, env), configured: Boolean(env.OWNER_SETUP_CODE) });
+    if (path === "/api/admin/unlock" && method === "POST") {
+      if (!env.OWNER_SETUP_CODE) return json({ error: "OWNER_SETUP_CODE is not configured on the server." }, 503);
+      const ip = clientIp(request), reason = `user_id=${user.id}`;
+      if (await countFailures(env, "dev_unlock", { ip }) >= MAX_FAILS_PER_IP || await countFailures(env, "dev_unlock", { reason }) >= MAX_FAILS_PER_IP) return tooManyAttempts();
+      let data; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
+      if (!safeEqual(String(data.code || ""), env.OWNER_SETUP_CODE)) { await logAccess(env, request, "dev_unlock", "failed", reason); return json({ error: "Incorrect developer code." }, 403); }
+      await logAccess(env, request, "dev_unlock", "success", reason);
+      const value = await devCookieValue(env, request, Date.now() + DEV_UNLOCK_MS);
+      return json({ ok: true }, 200, { "Set-Cookie": `lm_dev=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${DEV_UNLOCK_MS / 1000}` });
+    }
+    if (!(await devUnlocked(request, env))) return json({ error: "Developer code required.", needsUnlock: true }, 403);
     if (path === "/api/admin/overview" && method === "GET") {
       const [users, visitors, blocked, logs] = await Promise.all([
         env.DB.prepare("SELECT COUNT(*) AS count FROM users").first(),
@@ -226,8 +296,9 @@ async function api(request, env, url) {
     if (path === "/api/admin/blacklist" && method === "POST") {
       if (user.role !== "owner") return json({ error: "Only the owner can change the IP blacklist." }, 403);
       let data; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
-      const ip = String(data.ip || "").trim();
+      const ip = String(data.ip || "").trim().toLowerCase();
       if (!ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip) || ip === "unknown") return json({ error: "Enter a valid IPv4 or IPv6 address." }, 400);
+      if (ip === clientIp(request)) return json({ error: "You cannot block your own current IP address." }, 400);
       await env.DB.prepare("INSERT INTO ip_blacklist (ip,reason,created_at,created_by) VALUES (?,?,?,?) ON CONFLICT(ip) DO UPDATE SET reason=excluded.reason,created_at=excluded.created_at,created_by=excluded.created_by").bind(ip, String(data.reason || "Manual block").slice(0,200), Date.now(), user.id).run();
       await logAccess(env, request, "admin_ip_block", "success", `actor=${user.id};ip=${ip}`);
       return json({ ok: true }, 201);
@@ -248,13 +319,14 @@ async function api(request, env, url) {
     if (isRateLimited(clientKey)) return json({ error: "Too many requests. Please slow down and try again shortly." }, 429, { "Retry-After": "30" });
     if (!(request.headers.get("content-type") || "").toLowerCase().includes("application/json")) return json({ error: "Content-Type must be application/json." }, 415);
     const declaredLength = Number(request.headers.get("content-length") || 0);
-    if (declaredLength > MAX_REQUEST_BYTES) return json({ error: "Request too large. Maximum request size is 55 MiB." }, 413);
+    if (declaredLength > MAX_REQUEST_BYTES) return json({ error: "Request too large. Maximum request size is 4 MiB." }, 413);
     let data; try { data = await bodyJson(request, MAX_REQUEST_BYTES); } catch (e) { return json({ error: e.message }, e.message.includes("large") ? 413 : 400); }
     if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "Enter source code first." }, 400);
     if (data.language !== undefined && !["lua", "luau"].includes(data.language)) return json({ error: "Language must be either lua or luau." }, 400);
-    if (new TextEncoder().encode(data.source).byteLength > MAX_SOURCE_BYTES) return json({ error: "Source limit is 50 MiB." }, 413);
+    const mode = data.mode === "vm" ? "vm" : "compatibility";
+    if (new TextEncoder().encode(data.source).byteLength > MAX_SOURCE_BYTES[mode]) return json({ error: `Source is too large for ${mode === "vm" ? "VM" : "compatibility"} mode (limit ${formatLimit(MAX_SOURCE_BYTES[mode])}).` }, 413);
     try {
-      const language = data.language === "luau" ? "luau" : "lua", mode = data.mode === "vm" ? "vm" : "compatibility";
+      const language = data.language === "luau" ? "luau" : "lua";
       const output = mode === "vm" ? compileLuaVm(data.source, { language }) : compileLuaSubset(data.source, { language, renameLocals: true });
       return json({ output, language, mode, note: mode === "vm" ? "Experimental VM mode. Validate output in your exact target runtime; it may run slower and does not support every Luau feature." : "Compatibility mode transforms eligible strings/comments and conservatively renames locals. It is not full VM virtualization." });
     } catch (e) { return json({ error: e?.message || "Compilation failed." }, 400); }
@@ -291,6 +363,8 @@ async function api(request, env, url) {
     if (typeof data.source !== "string" || !data.source.trim()) return json({ error: "Source code is required." }, 400);
     const size = new TextEncoder().encode(data.source).byteLength;
     if (size > 900_000) return json({ error: "Saved scripts are limited to 900 KB per file." }, 413);
+    const owned = await env.DB.prepare("SELECT COUNT(*) AS count FROM scripts WHERE user_id=?").bind(user.id).first();
+    if ((Number(owned?.count) || 0) >= MAX_SCRIPTS_PER_USER) return json({ error: `You can store up to ${MAX_SCRIPTS_PER_USER} scripts. Delete one first.` }, 409);
     const id = randomToken(12), now = Date.now(), name = safeName(data.name);
     await env.DB.prepare("INSERT INTO scripts (id,user_id,name,source,size,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").bind(id, user.id, name, data.source, size, now, now).run();
     return json({ ok: true, script: { id, name, size, created_at: now } }, 201);
@@ -326,18 +400,40 @@ async function maybeMaintain(env) {
     env.DB.prepare("DELETE FROM access_logs WHERE created_at<?").bind(now - ACCESS_LOG_RETENTION_MS)
   ]);
 }
+const pageLogSeen = new Map();
+function shouldLogPage(ip) {
+  const now = Date.now(), last = pageLogSeen.get(ip);
+  if (last && now - last < 30_000) return false;
+  pageLogSeen.set(ip, now);
+  if (pageLogSeen.size > 10000) for (const [k, t] of pageLogSeen) if (now - t > 30_000) pageLogSeen.delete(k);
+  return true;
+}
 const PLAIN = { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" };
+
+const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+function withSecurityHeaders(response) {
+  const res = new Response(response.body, response);
+  const h = res.headers;
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("X-Frame-Options", "DENY");
+  h.set("Referrer-Policy", "same-origin");
+  h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  h.set("Strict-Transport-Security", "max-age=31536000");
+  if ((h.get("Content-Type") || "").includes("text/html")) h.set("Content-Security-Policy", CSP);
+  return res;
+}
 
 async function handle(request, env, ctx) {
   const url = new URL(request.url);
-  if (url.pathname.startsWith("/api/")) return api(request, env, url);
-  if (env.DB && isPageRequest(request, url)) {
-    let blocked = null;
-    try { blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(clientIp(request)).first(); } catch {}
-    if (blocked) {
-      defer(ctx, logAccess(env, request, "page", "blocked", "IP is blacklisted"));
-      return new Response("Access denied", { status: 403, headers: PLAIN });
-    }
+  const isApi = url.pathname.startsWith("/api/"), isPage = isPageRequest(request, url);
+  const ip = clientIp(request);
+  // The IP blacklist applies to pages and to every API route (except the health check).
+  if (env.DB && url.pathname !== "/api/health" && (isApi || isPage) && await isIpBlacklisted(env, ip)) {
+    if (shouldLogPage(ip)) defer(ctx, logAccess(env, request, url.pathname === "/api/auth/login" ? "login" : url.pathname === "/api/auth/signup" ? "signup" : isApi ? "api" : "page", "blocked", "IP is blacklisted"));
+    return isApi ? json({ error: "This IP address is blocked." }, 403) : new Response("Access denied", { status: 403, headers: PLAIN });
+  }
+  if (isApi) return api(request, env, url);
+  if (env.DB && isPage && shouldLogPage(ip)) {
     defer(ctx, logAccess(env, request, "page", "success", url.pathname || "/"));
     defer(ctx, maybeMaintain(env));
   }
@@ -351,11 +447,13 @@ async function handle(request, env, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
-    try { return await handle(request, env, ctx); }
+    try { return withSecurityHeaders(await handle(request, env, ctx)); }
     catch (e) {
       console.error("Unhandled error:", e);
-      if (new URL(request.url).pathname.startsWith("/api/")) return json({ error: "Internal server error." }, 500);
-      return new Response("Internal server error", { status: 500, headers: PLAIN });
+      const body = new URL(request.url).pathname.startsWith("/api/")
+        ? json({ error: "Internal server error." }, 500)
+        : new Response("Internal server error", { status: 500, headers: PLAIN });
+      return withSecurityHeaders(body);
     }
   }
 };

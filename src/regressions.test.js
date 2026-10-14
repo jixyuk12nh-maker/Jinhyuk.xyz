@@ -74,7 +74,7 @@ const LUA = ["lua5.4", "lua5.3", "lua", "texlua"].find(bin => {
 });
 
 function runLua(code) {
-  const dir = mkdtempSync(join(tmpdir(), "luamoon-"));
+  const dir = mkdtempSync(join(tmpdir(), "jinhyuk-"));
   try {
     const file = join(dir, "chunk.lua");
     writeFileSync(file, code);
@@ -105,4 +105,16 @@ test("obfuscated Lua runs with the same output as the original (compatibility mo
 test("obfuscated Lua runs with the same output as the original (VM mode)", { skip: !LUA && "no Lua interpreter on PATH" }, () => {
   const expected = runLua(PROGRAM);
   assert.equal(runLua(compileLuaVm(PROGRAM, { language: "lua", seed: 18 })), expected);
+});
+
+const SKIP_LUA = !LUA && "no Lua interpreter on PATH";
+
+test("VM mode keeps 64-bit integer literals exact on Lua 5.3+", { skip: SKIP_LUA }, () => {
+  const src = "print(9007199254740993, 0x7fffffffffffffff, 9223372036854775807, math.type(9223372036854775807))";
+  assert.equal(runLua(compileLuaVm(src, { language: "lua", seed: 21 })), runLua(src));
+});
+
+test("VM mode bitwise operators match native Lua 5.3+ semantics", { skip: SKIP_LUA }, () => {
+  const src = "print(~0, ~5, 1 << 40, -1 >> 1, 0xF0 & 0x3C, 0xF0 | 0x0F, 0xFF ~ 0x0F, 3 << 2, 256 >> 4)";
+  assert.equal(runLua(compileLuaVm(src, { language: "lua", seed: 22 })), runLua(src));
 });

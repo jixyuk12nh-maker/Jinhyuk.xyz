@@ -75,6 +75,11 @@ function floatConstant(value) {
   return { __lmFloat: true, value };
 }
 
+// Integer literal beyond 2^53: keep its exact decimal text so Lua 5.3+ still sees an integer.
+function intConstant(text) {
+  return { __lmInt: true, text };
+}
+
 function describeToken(t) {
   if (t.type === "eof") return "<eof>";
   if (t.type === "string") return "string literal";
@@ -137,6 +142,10 @@ function lex(source, luau) {
         let value;
         if (m[2] === undefined && m[3] === undefined) {
           value = parseInt(m[1], 16);
+          if (!Number.isSafeInteger(value)) {
+            const big = BigInt("0x" + m[1]);
+            if (big <= 0x7fffffffffffffffn) { push("number", intConstant(big.toString()), start); continue; }
+          }
         } else {
           value = parseInt(m[1] || "0", 16);
           const frac = m[2] || "";
@@ -155,6 +164,11 @@ function lex(source, luau) {
       if (!Number.isFinite(value)) throw new Error(`Numeric literal out of range at character ${start + 1}.`);
       // Float literals (with '.' or an exponent) stay floats, as in Lua 5.3.
       const isFloat = /[.eE]/.test(m[0]);
+      if (!isFloat && !Number.isSafeInteger(value)) {
+        const big = BigInt(m[0]);
+        push("number", big <= 0x7fffffffffffffffn ? intConstant(big.toString()) : floatConstant(value), start);
+        continue;
+      }
       push("number", isFloat ? floatConstant(value) : value, start);
       continue;
     }
@@ -1128,6 +1142,9 @@ function encodeMaskedText(value, rng, alphabet) {
 function encodeConstant(value, rng) {
   if (value === null) return { tag: "z" };
   if (typeof value === "boolean") return { tag: value ? "t" : "f" };
+  if (value && typeof value === "object" && value.__lmInt) {
+    return { tag: "n", bytes: encodeXorRotateBytes(new TextEncoder().encode(value.text), rng) };
+  }
   if (typeof value === "number" || (value && typeof value === "object" && value.__lmFloat)) {
     const n = typeof value === "number" ? value : value.value;
     const float = typeof value !== "number";
@@ -1195,6 +1212,11 @@ if f(x%2,y%2) then r=r+p end
 x=math.floor(x/2) y=math.floor(y/2) p=p*2
 end
 return r
+end
+local NB
+if mtype and load then
+local okl,fl=pcall(load,"return {shl=function(x,y) return x<<y end,shr=function(x,y) return x>>y end,band=function(x,y) return x&y end,bor=function(x,y) return x|y end,bxor=function(x,y) return x~y end,bnot=function(x) return ~x end}")
+if okl and fl then local okt,tt=pcall(fl) if okt then NB=tt end end
 end
 local function bx(a,b)
 local r,p=0,1
@@ -1335,12 +1357,12 @@ elseif o=="NE" then local y=pop() local x=pop() push(x~=y)
 elseif o=="NEG" then push(-pop())
 elseif o=="LEN" then push(#pop())
 elseif o=="SWAP" then S[sp],S[sp-1]=S[sp-1],S[sp]
-elseif o=="SHL" then local y=pop() local x=pop() push(math.floor((tobit(x)*2^y)%_MOD))
-elseif o=="SHR" then local y=pop() local x=pop() push(math.floor(tobit(x)/2^y))
-elseif o=="BAND" then local y=pop() local x=pop() push(bitop(x,y,bfAnd))
-elseif o=="BOR" then local y=pop() local x=pop() push(bitop(x,y,bfOr))
-elseif o=="BXOR" then local y=pop() local x=pop() push(bitop(x,y,bfXor))
-elseif o=="BNOT" then local x=pop() push(bitop(x,4294967295,bfXor))
+elseif o=="SHL" then local y=pop() local x=pop() if NB then push(NB.shl(x,y)) else push(math.floor((tobit(x)*2^y)%_MOD)) end
+elseif o=="SHR" then local y=pop() local x=pop() if NB then push(NB.shr(x,y)) else push(math.floor(tobit(x)/2^y)) end
+elseif o=="BAND" then local y=pop() local x=pop() if NB then push(NB.band(x,y)) else push(bitop(x,y,bfAnd)) end
+elseif o=="BOR" then local y=pop() local x=pop() if NB then push(NB.bor(x,y)) else push(bitop(x,y,bfOr)) end
+elseif o=="BXOR" then local y=pop() local x=pop() if NB then push(NB.bxor(x,y)) else push(bitop(x,y,bfXor)) end
+elseif o=="BNOT" then local x=pop() if NB then push(NB.bnot(x)) else push(bitop(x,4294967295,bfXor)) end
 else error("jinhyuk.xyz VM: invalid opcode",0)
 end
 end
