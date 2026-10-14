@@ -6,7 +6,7 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const rateBuckets = new Map();
 
-function isRateLimited(key) {
+function isRateLimited(key, max = RATE_LIMIT_MAX_REQUESTS) {
   const now = Date.now();
   let bucket = rateBuckets.get(key);
   if (!bucket || now - bucket.start > RATE_LIMIT_WINDOW_MS) {
@@ -15,7 +15,7 @@ function isRateLimited(key) {
   }
   bucket.count++;
   if (rateBuckets.size > 10000) for (const [k, v] of rateBuckets) if (now - v.start > RATE_LIMIT_WINDOW_MS) rateBuckets.delete(k);
-  return bucket.count > RATE_LIMIT_MAX_REQUESTS;
+  return bucket.count > max;
 }
 
 async function readBoundedText(request, maxBytes) {
@@ -51,7 +51,7 @@ async function bodyJson(request, max = 2_000_000) {
 }
 function cookieValue(request, name) {
   const cookies = request.headers.get("Cookie") || "";
-  for (const part of cookies.split(";")) { const i = part.indexOf("="); if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim()); }
+  for (const part of cookies.split(";")) { const i = part.indexOf("="); if (i > 0 && part.slice(0, i).trim() === name) { try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ""; } } }
   return "";
 }
 async function currentUser(request, env) {
@@ -93,6 +93,14 @@ async function logAccess(env, request, event, outcome, reason = "") {
   } catch {}
 }
 function validEmail(email) { return typeof email === "string" && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
+const DUMMY_SALT = "0".repeat(32);
+const ACCESS_LOG_RETENTION_MS = 90 * 86400000;
+function safeEqual(a, b) {
+  const x = new TextEncoder().encode(String(a)), y = new TextEncoder().encode(String(b));
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] || 0) ^ (y[i] || 0);
+  return diff === 0;
+}
 function safeName(name) { return String(name || "script.lua").replace(/[\r\n\\/\0]/g, "_").slice(0, 120) || "script.lua"; }
 
 async function api(request, env, url) {
@@ -101,19 +109,29 @@ async function api(request, env, url) {
 
   if (path === "/api/auth/signup" && method === "POST") {
     if (!env.DB) return json({ error: "Database is not configured. Create and bind D1 as DB." }, 503);
+    if (isRateLimited("signup:" + clientIp(request), 10)) return json({ error: "Too many attempts. Please wait a minute and try again." }, 429, { "Retry-After": "60" });
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || ""), invite = String(data.inviteCode || ""), ownerSetupCode = String(data.ownerSetupCode || "");
     if (!validEmail(email)) return json({ error: "Enter a valid email address." }, 400);
     if (password.length < 10 || password.length > 200) return json({ error: "Password must be 10–200 characters." }, 400);
-    if (!env.INVITE_CODE || invite !== env.INVITE_CODE) return json({ error: "Invalid invite code." }, 403);
+    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) return json({ error: "Invalid invite code." }, 403);
     const ip = clientIp(request);
     const blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first();
     if (blocked) { await logAccess(env, request, "signup", "blocked", "IP is blacklisted"); return json({ error: "This IP address is blocked." }, 403); }
     const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
     if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
+    const ownerEmail = String(env.OWNER_EMAIL || "").trim().toLowerCase();
+    const isOwnerEmail = Boolean(ownerEmail) && email === ownerEmail;
+    const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
+    if (isOwnerEmail && !ownerCodeOk) { await logAccess(env, request, "signup", "failed", "Owner email without valid setup code"); return json({ error: "This email is reserved for the site owner. Enter the owner setup code." }, 403); }
     const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
-    const role = env.OWNER_EMAIL && env.OWNER_SETUP_CODE && email === String(env.OWNER_EMAIL).trim().toLowerCase() && ownerSetupCode === env.OWNER_SETUP_CODE ? "owner" : "user";
-    await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active", ip, now).run();
+    const role = isOwnerEmail && ownerCodeOk ? "owner" : "user";
+    try {
+      await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active", ip, now).run();
+    } catch (e) {
+      if (/UNIQUE|constraint/i.test(String(e?.message))) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "An account with this email already exists." }, 409); }
+      throw e;
+    }
     await logAccess(env, request, "signup", "success", `user_id=${id}`);
     const token = randomToken(), tokenHash = await sha256(token);
     await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)").bind(tokenHash, id, now, now + 14 * 86400000).run();
@@ -125,13 +143,14 @@ async function api(request, env, url) {
     let data; try { data = await bodyJson(request, 12000); } catch (e) { return json({ error: e.message }, 400); }
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || "");
     const ip = clientIp(request);
+    if (isRateLimited("login:" + ip, 10)) return json({ error: "Too many login attempts. Please wait a minute and try again." }, 429, { "Retry-After": "60" });
     const blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first();
     if (blocked) { await logAccess(env, request, "login", "blocked", "IP is blacklisted"); return json({ error: "This IP address is blocked." }, 403); }
     const user = await env.DB.prepare("SELECT id,email,password_salt,password_hash,role,status FROM users WHERE email=? LIMIT 1").bind(email).first();
-    if (!user) { await logAccess(env, request, "login", "failed", "Email not found"); return json({ error: "Email or password is incorrect." }, 401); }
+    if (!user) { await passwordHash(password, DUMMY_SALT); await logAccess(env, request, "login", "failed", "Email not found"); return json({ error: "Email or password is incorrect." }, 401); }
     if (user.status === "blocked") { await logAccess(env, request, "login", "blocked", `user_id=${user.id}`); return json({ error: "This account is blocked." }, 403); }
     const check = await passwordHash(password, user.password_salt);
-    if (check.hash !== user.password_hash) { await logAccess(env, request, "login", "failed", "Incorrect password"); return json({ error: "Email or password is incorrect." }, 401); }
+    if (!safeEqual(check.hash, user.password_hash)) { await logAccess(env, request, "login", "failed", "Incorrect password"); return json({ error: "Email or password is incorrect." }, 401); }
     const token = randomToken(), now = Date.now();
     await env.DB.prepare("UPDATE users SET last_ip=?,last_login_at=? WHERE id=?").bind(ip, now, user.id).run();
     await logAccess(env, request, "login", "success", `user_id=${user.id}`);
@@ -151,7 +170,7 @@ async function api(request, env, url) {
     const auth = request.headers.get("Authorization") || "";
     const apiKey = auth.startsWith("Bearer ") ? auth.slice(7) : request.headers.get("x-api-key") || "";
     if (!apiKey) return json({ error: "API key required." }, 401);
-    const keyRow = await env.DB.prepare("SELECT user_id,id FROM api_keys WHERE key_hash=? AND revoked_at IS NULL LIMIT 1").bind(await sha256(apiKey)).first();
+    const keyRow = await env.DB.prepare("SELECT api_keys.user_id AS user_id, api_keys.id AS id FROM api_keys JOIN users ON users.id=api_keys.user_id WHERE api_keys.key_hash=? AND api_keys.revoked_at IS NULL AND users.status<>'blocked' LIMIT 1").bind(await sha256(apiKey)).first();
     if (!keyRow) return json({ error: "Invalid API key." }, 401);
     const script = await env.DB.prepare("SELECT name,source FROM scripts WHERE id=? AND user_id=? LIMIT 1").bind(publicLoaderMatch[1], keyRow.user_id).first();
     if (!script) return json({ error: "Script not found." }, 404);
@@ -193,6 +212,7 @@ async function api(request, env, url) {
       const target = await env.DB.prepare("SELECT id,role FROM users WHERE id=? LIMIT 1").bind(targetId).first();
       if (!target) return json({ error: "User not found." }, 404);
       if (target.role === "owner") return json({ error: "Owner account cannot be modified here." }, 403);
+      if (target.role === "admin" && user.role !== "owner") return json({ error: "Only the owner can modify administrators." }, 403);
       if (["promote", "demote"].includes(action) && user.role !== "owner") return json({ error: "Only the owner can manage administrators." }, 403);
       if (target.id === user.id && ["block", "demote"].includes(action)) return json({ error: "You cannot block or demote yourself." }, 400);
       if (action === "block") await env.DB.prepare("UPDATE users SET status='blocked' WHERE id=?").bind(targetId).run();
@@ -215,7 +235,7 @@ async function api(request, env, url) {
     const unblack = path.match(/^\/api\/admin\/blacklist\/(.+)$/);
     if (unblack && method === "DELETE") {
       if (user.role !== "owner") return json({ error: "Only the owner can change the IP blacklist." }, 403);
-      const ip = decodeURIComponent(unblack[1]);
+      let ip; try { ip = decodeURIComponent(unblack[1]); } catch { return json({ error: "Invalid IP address." }, 400); }
       await env.DB.prepare("DELETE FROM ip_blacklist WHERE ip=?").bind(ip).run();
       await logAccess(env, request, "admin_ip_unblock", "success", `actor=${user.id};ip=${ip}`);
       return json({ ok: true });
@@ -287,23 +307,55 @@ async function api(request, env, url) {
   return json({ error: "Not found." }, 404);
 }
 
+const STATIC_FILE = /\.(?!html$)[a-z0-9]+$/i;
+function isPageRequest(request, url) {
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  if (url.pathname.startsWith("/api/")) return false;
+  return !STATIC_FILE.test(url.pathname);
+}
+function defer(ctx, promise) {
+  const safe = Promise.resolve(promise).catch(() => {});
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(safe);
+  return safe;
+}
+async function maybeMaintain(env) {
+  if (Math.random() > 0.01) return;
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(now),
+    env.DB.prepare("DELETE FROM access_logs WHERE created_at<?").bind(now - ACCESS_LOG_RETENTION_MS)
+  ]);
+}
+const PLAIN = { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" };
+
+async function handle(request, env, ctx) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/")) return api(request, env, url);
+  if (env.DB && isPageRequest(request, url)) {
+    let blocked = null;
+    try { blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(clientIp(request)).first(); } catch {}
+    if (blocked) {
+      defer(ctx, logAccess(env, request, "page", "blocked", "IP is blacklisted"));
+      return new Response("Access denied", { status: 403, headers: PLAIN });
+    }
+    defer(ctx, logAccess(env, request, "page", "success", url.pathname || "/"));
+    defer(ctx, maybeMaintain(env));
+  }
+  if (["/developer", "/developer/", "/developer.html"].includes(url.pathname)) {
+    const user = await currentUser(request, env);
+    if (!user || !user.session || !["owner", "admin"].includes(user.role)) return Response.redirect(new URL("/auth.html", url), 302);
+    if (url.pathname !== "/developer.html") return Response.redirect(new URL("/developer.html", url), 302);
+  }
+  return env.ASSETS.fetch(request);
+}
+
 export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const ip = clientIp(request);
-    if (env.DB && request.method === "GET" && !url.pathname.startsWith("/api/") && (url.pathname === "/" || /\.html$/.test(url.pathname))) {
-      try {
-        const blocked = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first();
-        if (blocked) { await logAccess(env, request, "page", "blocked", "IP is blacklisted"); return new Response("Access denied", { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }); }
-        await logAccess(env, request, "page", "success", url.pathname || "/");
-      } catch {}
+  async fetch(request, env, ctx) {
+    try { return await handle(request, env, ctx); }
+    catch (e) {
+      console.error("Unhandled error:", e);
+      if (new URL(request.url).pathname.startsWith("/api/")) return json({ error: "Internal server error." }, 500);
+      return new Response("Internal server error", { status: 500, headers: PLAIN });
     }
-    if (url.pathname.startsWith("/api/")) return api(request, env, url);
-    if (["/developer", "/developer/", "/developer.html"].includes(url.pathname)) {
-      const user = await currentUser(request, env);
-      if (!user || !user.session || !["owner", "admin"].includes(user.role)) return Response.redirect(new URL("/auth.html", url), 302);
-      if (url.pathname !== "/developer.html") return Response.redirect(new URL("/developer.html", url), 302);
-    }
-    return env.ASSETS.fetch(request);
   }
 };
