@@ -1,0 +1,145 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0a10">
+  <meta name="description" content="LuaMoon — a focused workspace for Lua scripts.">
+  <title>LuaMoon — VM Obfuscator</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="LuaMoon home">
+        <span class="moon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M20.1 15.1A8.7 8.7 0 0 1 8.9 3.9 8.8 8.8 0 1 0 20.1 15.1Z"/>
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>LuaMoon</strong>
+          <span>Lua / Luau Obfuscator</span>
+        </span>
+      </a>
+      <span class="version"><span class="live-dot"></span>LuaMoon · Obfuscator</span>
+    </header>
+
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">LUA <span>·</span> ROBLOX LUAU</p>
+      <h1 id="page-title">Protect your script.<br><span>Keep control.</span></h1>
+      <p class="intro">A focused workspace for your Lua source. Load a file or paste your code below to get started.</p>
+    </section>
+
+    <section class="workspace" aria-label="Lua script workspace">
+      <div class="pane source-pane">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span class="pane-icon source-icon" aria-hidden="true">&lt;/&gt;</span>
+            <label for="source">Source code</label>
+          </div>
+          <div class="pane-tools">
+            <button id="loadExample" class="subtle" type="button">Load example</button>
+            <input id="fileInput" class="visually-hidden" type="file" accept=".lua,.txt,text/plain" aria-label="Choose a Lua or text file">
+            <button id="uploadFile" class="subtle upload-button" type="button" aria-controls="fileInput">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/>
+                <path d="M5 13.5v4A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-4"/>
+              </svg>
+              Upload file
+            </button>
+          </div>
+        </div>
+
+        <div class="file-info" id="fileInfo" hidden>
+          <span class="file-mark" aria-hidden="true">LUA</span>
+          <span class="file-name" id="fileName"></span>
+          <span class="file-size" id="fileSize"></span>
+          <button id="removeFile" class="remove-file" type="button" aria-label="Remove loaded file">×</button>
+        </div>
+
+        <div class="language-row settings-row">
+          <label class="setting-control">
+            <span>Target</span>
+            <select id="languageMode" aria-label="Target language">
+              <option value="auto" selected>Auto detect</option>
+              <option value="luau">Roblox Luau</option>
+              <option value="lua">Standard Lua</option>
+            </select>
+          </label>
+          <label class="setting-control">
+            <span>Protection</span>
+            <select id="obfuscationMode" aria-label="Obfuscation mode">
+              <option value="compatibility" selected>Compatibility</option>
+              <option value="vm">Experimental VM</option>
+            </select>
+          </label>
+          <span id="languageHint">Language auto-detection · Compatibility mode.</span>
+        </div>
+
+        <div class="editor-wrap" id="sourceDropzone">
+          <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Lua source code" placeholder="Paste your Lua source here, or use Upload file…"></textarea>
+          <div id="dropHint" class="drop-hint" aria-hidden="true" hidden>
+            <span>Drop a .lua or .txt file here</span>
+          </div>
+        </div>
+
+        <div class="pane-foot">
+          <span id="sourceCount">0 characters</span>
+          <span class="size-limit">Maximum file size <strong>50 MB</strong></span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="compile" class="primary" type="button">Obfuscate <span aria-hidden="true">→</span></button>
+        <p id="compileHint">Choose the target syntax that matches your runtime.</p>
+      </div>
+
+      <div class="pane output-pane">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span class="pane-icon output-icon" aria-hidden="true">✳</span>
+            <label for="output">Generated Lua</label>
+          </div>
+          <div class="output-actions">
+            <button id="copy" class="subtle" type="button" disabled>Copy</button>
+            <button id="download" class="subtle" type="button" disabled>Save .lua</button>
+          </div>
+        </div>
+
+        <div class="editor-wrap output-wrap">
+          <textarea id="output" spellcheck="false" readonly placeholder="Your obfuscated output will appear here…" aria-label="Obfuscated output"></textarea>
+          <div id="outputEmpty" class="output-empty" aria-hidden="true">
+            <span class="output-orbit">✳</span>
+            <span>Output will appear here</span>
+          </div>
+        </div>
+
+        <div class="pane-foot">
+          <span id="outputCount">No output yet</span>
+          <span id="status" class="status" role="status" aria-live="polite">
+            <span class="status-dot"></span>Ready
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <section class="notice" aria-label="Prototype limitations">
+      <span class="notice-icon" aria-hidden="true">i</span>
+      <div>
+        <strong>Know the limits</strong>
+        <p>Compatibility mode is designed to preserve broad Lua/Luau syntax while encoding eligible strings and removing ordinary comments. Experimental VM mode supports a narrower syntax set and may run more slowly. Neither mode guarantees complete protection or compatibility with every language feature. Always test output in the exact target runtime.</p>
+      </div>
+    </section>
+
+    <footer>
+      <span>LuaMoon · Independent experimental project</span>
+      <span>Source code is sent to the server only when you choose to compile.</span>
+    </footer>
+  </main>
+</body>
+</html>
