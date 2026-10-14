@@ -176,7 +176,7 @@ loadExampleBtn.addEventListener("click", () => {
     resetLoadedFile();
 
     sourceEl.value = [
-        'local name = "LuaMoon"',
+        'local name = "jinhyuk.xyz"',
         "local count = 2",
         "if count > 1 then",
         '    print(name .. " VM ready")',
