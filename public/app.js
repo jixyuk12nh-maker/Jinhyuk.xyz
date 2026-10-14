@@ -1,4 +1,8 @@
-const MAX_FILE_SIZE = 50 * 1024 * 1024;
+// Must match the Worker: a Worker isolate has ~128 MB of memory, so VM mode accepts far less.
+const SOURCE_LIMITS = { compatibility: 2 * 1024 * 1024, vm: 128 * 1024 };
+function sourceLimit() {
+    return SOURCE_LIMITS[document.querySelector("#obfuscationMode")?.value === "vm" ? "vm" : "compatibility"];
+}
 
 const sourceEl = document.querySelector("#source");
 const languageModeEl = document.querySelector("#languageMode");
@@ -70,9 +74,9 @@ function updateCounts() {
 function checkSourceSize() {
     const bytes = new Blob([sourceEl.value]).size;
 
-    if (bytes > MAX_FILE_SIZE) {
+    if (bytes > sourceLimit()) {
         setStatus(
-            `Source exceeds 50 MB (${formatSize(bytes)})`,
+            `Source exceeds the ${formatSize(sourceLimit())} limit for this mode (${formatSize(bytes)})`,
             "error"
         );
 
@@ -102,8 +106,8 @@ function resetLoadedFile() {
 async function loadFile(file) {
     if (!file) return;
 
-    if (file.size > MAX_FILE_SIZE) {
-        setStatus("File exceeds the 50 MB limit", "error");
+    if (file.size > sourceLimit()) {
+        setStatus(`File exceeds the ${formatSize(sourceLimit())} limit for this mode`, "error");
         return;
     }
 
@@ -276,6 +280,7 @@ languageModeEl?.addEventListener("change", () => {
 obfuscationModeEl?.addEventListener("change", () => {
     updateLanguageHint();
     setStatus("Ready");
+    checkSourceSize();
 });
 updateLanguageHint();
 
