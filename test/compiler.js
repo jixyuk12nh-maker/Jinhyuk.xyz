@@ -4,7 +4,7 @@ import { compileLuaSubset } from "../src/compiler.js";
 
 test("preserves Lua source syntax and encodes string constants", () => {
   const source = [
-    'local name = "LuaMoon"',
+    'local name = "jinhyuk.xyz"',
     "local count = 2",
     "if count > 1 then",
     '  print(name .. " VM ready")',
@@ -15,7 +15,7 @@ test("preserves Lua source syntax and encodes string constants", () => {
     "end"
   ].join("\n");
   const output = compileLuaSubset(source, { seed: 1234 });
-  assert.equal(output.includes('"LuaMoon"'), false);
+  assert.equal(output.includes('"jinhyuk.xyz"'), false);
   assert.match(output, /local count = 2/);
   assert.match(output, /if count > 1 then/);
   assert.match(output, /elseif count == 1 then/);
