@@ -17,9 +17,9 @@ One GitHub repository contains the website, API, Lua/Luau obfuscation engine, ac
 
 ## Required setup before deployment
 
-1. Create a D1 database named `jinhyuk.xyz-DB` in Cloudflare.
+1. Create a D1 database named `jinhyuk.xyz` in Cloudflare.
 2. Make sure `wrangler.jsonc` contains your own D1 `database_id` (shown in the Cloudflare dashboard).
-3. Run `npx wrangler d1 migrations apply jinhyuk.xyz-DB --remote` from the project root.
+3. Run `npx wrangler d1 migrations apply jinhyuk.xyz --remote` from the project root.
 4. Set a strong invite-code secret: `npx wrangler secret put INVITE_CODE` and enter the invite code you want to give new users. Signup is intentionally disabled until this secret is set.
 5. Install dependencies with `npm install`, run `npm test`, then deploy with `npx wrangler deploy`.
 6. Once the Worker works on its `workers.dev` address, add `jinhyuk.xyz` as a Custom Domain in Worker Settings → Domains & Routes. Follow the DNS instructions Cloudflare shows.
@@ -33,7 +33,7 @@ The Worker API expects D1 for accounts and saved scripts. For local testing, cre
 
 ```sh
 npm install
-npx wrangler d1 migrations apply jinhyuk.xyz-DB --local
+npx wrangler d1 migrations apply jinhyuk.xyz --local
 npx wrangler secret put INVITE_CODE --local
 npm test
 npm run dev
@@ -64,7 +64,7 @@ This project includes a restricted Developer Studio at `/developer` (served by `
 
 1. Confirm `wrangler.jsonc` uses the correct Worker name and your own D1 `database_id`. Do not use another project's database ID.
 2. Set the Worker variable `OWNER_EMAIL` to the exact email address the owner will use to sign up. In Cloudflare, open Workers & Pages → your Worker → Settings → Variables and Secrets, then add `OWNER_EMAIL` as a Text variable. Set `OWNER_SETUP_CODE` and `INVITE_CODE` as secrets (for example, with `npx wrangler secret put OWNER_SETUP_CODE` and `npx wrangler secret put INVITE_CODE`). The owner must use the owner email and owner setup code during signup. Do not share `OWNER_SETUP_CODE`.
-3. Apply migrations with `npx wrangler d1 migrations apply jinhyuk.xyz-DB --remote` after verifying the database name and binding `DB`.
+3. Apply migrations with `npx wrangler d1 migrations apply jinhyuk.xyz --remote` after verifying the database name and binding `DB`.
 4. Deploy with `npm run deploy`.
 5. The owner can promote/demote users and manage the IP blacklist. Admins can view visitor and account records and block/unblock ordinary users.
 
@@ -95,5 +95,5 @@ ACCOUNT_PASSWORD='원하는비밀번호(10자 이상)' npm run create-account --
 ```
 
 - 권한은 `owner`(기본), `admin`, `user` 중 선택합니다. 마지막 `--remote`는 배포된 D1에, `--local`은 로컬 D1에 바로 넣습니다. 생략하면 SQL만 출력합니다.
-- 먼저 `npx wrangler d1 migrations apply jinhyuk.xyz-DB --remote`로 테이블을 만들어 두어야 합니다.
+- 먼저 `npx wrangler d1 migrations apply jinhyuk.xyz --remote`로 테이블을 만들어 두어야 합니다.
 - 소유자 계정으로 개발자 스튜디오(`/developer`)에 들어가려면 `OWNER_SETUP_CODE` 비밀값도 설정해야 합니다.
