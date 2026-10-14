@@ -365,7 +365,7 @@ downloadBtn.addEventListener("click", () => {
     const link = document.createElement("a");
 
     link.href = url;
-    link.download = "luamoon-obfuscated.lua";
+    link.download = "jinhyuk-obfuscated.lua";
 
     document.body.appendChild(link);
     link.click();
