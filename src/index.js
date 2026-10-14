@@ -285,11 +285,18 @@ async function api(request, env, url) {
       if (target.role === "admin" && user.role !== "owner") return json({ error: "관리자 계정은 소유자만 변경할 수 있습니다." }, 403);
       if (["promote", "demote"].includes(action) && user.role !== "owner") return json({ error: "관리자 지정·해제는 소유자만 할 수 있습니다." }, 403);
       if (target.id === user.id && ["block", "demote"].includes(action)) return json({ error: "자기 자신을 차단하거나 권한을 해제할 수 없습니다." }, 400);
-      if (action === "block") await env.DB.prepare("UPDATE users SET status='blocked' WHERE id=?").bind(targetId).run();
+      // block also revokes sessions; run both statements in one batch so a blocked account
+      // can never end up with status='blocked' while an old session is still left valid (or
+      // vice versa) if one of the two writes failed on its own.
+      if (action === "block") {
+        await env.DB.batch([
+          env.DB.prepare("UPDATE users SET status='blocked' WHERE id=?").bind(targetId),
+          env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(targetId)
+        ]);
+      }
       if (action === "unblock") await env.DB.prepare("UPDATE users SET status='active' WHERE id=?").bind(targetId).run();
       if (action === "promote") await env.DB.prepare("UPDATE users SET role='admin' WHERE id=? AND role='user'").bind(targetId).run();
       if (action === "demote") await env.DB.prepare("UPDATE users SET role='user' WHERE id=? AND role='admin'").bind(targetId).run();
-      if (action === "block") await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(targetId).run();
       await logAccess(env, request, "admin_user_"+action, "success", `actor=${user.id};target=${targetId}`);
       return json({ ok: true });
     }
