@@ -84,3 +84,16 @@ Visitor IPs and user agents are security logs and can be personal data. Publish 
 ### Cloudflare plan note
 
 Hashing a password (100,000 PBKDF2 iterations) and obfuscating a script both use real CPU time. The Workers Free plan allows only 10 ms CPU per request, so login, signup and obfuscation may fail there with error 1102; use Workers Paid for production.
+
+
+## 처음 계정 만들기
+
+회원가입 없이 첫 계정을 직접 만들 수 있습니다. 비밀번호는 저장소에 남기지 말고 실행할 때만 입력하세요.
+
+```sh
+ACCOUNT_PASSWORD='원하는비밀번호(10자 이상)' npm run create-account -- 내이메일@example.com owner --remote
+```
+
+- 권한은 `owner`(기본), `admin`, `user` 중 선택합니다. 마지막 `--remote`는 배포된 D1에, `--local`은 로컬 D1에 바로 넣습니다. 생략하면 SQL만 출력합니다.
+- 먼저 `npx wrangler d1 migrations apply jinhyuk.xyz-DB --remote`로 테이블을 만들어 두어야 합니다.
+- 소유자 계정으로 개발자 스튜디오(`/developer`)에 들어가려면 `OWNER_SETUP_CODE` 비밀값도 설정해야 합니다.
