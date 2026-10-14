@@ -11,7 +11,8 @@ One GitHub repository contains the website, API, Lua/Luau obfuscation engine, ac
 - API keys are only shown once at creation, can be revoked, and can authenticate loader requests.
 - Script upload/list/download/delete and per-user ownership checks.
 - Protected loader endpoint `GET /api/loader/:scriptId` accepts `x-api-key` or `Authorization: Bearer ...`.
-- 900 KB per saved script limit (D1 row limits make 50 MiB uploads unsuitable for database storage); obfuscation itself accepts up to 50 MiB subject to Worker limits.
+- 900 KB per saved script and 30 saved scripts per user (D1 row limits make large uploads unsuitable for database storage).
+- Obfuscation input limit: 2 MiB in compatibility mode, 128 KiB in VM mode. A Worker isolate only has about 128 MB of memory; measured memory use is roughly 50x the input size (compatibility) and several hundred x (VM), so the old 50 MiB limit could never work and let a single request crash the isolate.
 - GitHub Actions test workflow.
 
 ## Required setup before deployment
@@ -71,7 +72,15 @@ Visitor IPs and user agents are security logs and can be personal data. Publish 
 
 ### Security notes
 
+- **Developer/owner code** (`OWNER_SETUP_CODE`): it is required to register the owner (together with `OWNER_EMAIL`) and again to unlock the Developer Studio. Every unlock lasts 1 hour, is bound to the current login session, and ends on logout. It is rejected for any other email, and all failures return the same generic error. The signup form only shows the code field at `/auth.html#owner`. Only the owner and admins who know the code can open the Studio.
+- **Failed-login lockout**: 5 failed logins (or signups, or developer-code attempts) per IP in 15 minutes, and 10 failed logins per account in 15 minutes, return HTTP 429. Counts are stored in D1 (`access_logs`), so they hold across every Worker instance. Change `MAX_FAILS_PER_IP`, `MAX_FAILS_PER_ACCOUNT` and `FAIL_WINDOW_MS` at the top of `src/index.js`.
+- **PBKDF2** uses 100,000 iterations, the maximum Cloudflare Workers allow. Higher values throw `NotSupportedError`, so signup and login would fail in production.
 - `run_worker_first` in `wrangler.jsonc` sends every request except plain static files (`style.css`, `app.js`, `logo.svg`) through the Worker. This is what makes the IP blacklist, page-visit logging and the `/developer` gate work for page URLs. If you add new static files, add a matching `"!/file"` entry.
-- Login and signup are limited to 10 attempts per minute per IP (best-effort, per Worker instance). Add a Cloudflare rate-limiting rule for stronger protection.
-- The owner email can only be registered with the correct `OWNER_SETUP_CODE`; otherwise signup with that email is rejected.
-- Sessions that have expired and access logs older than 90 days are pruned automatically.
+- The IP blacklist applies to pages and all API routes except `/api/health`. The owner cannot blacklist their own current IP.
+- Cross-origin POST/DELETE requests are rejected (Origin check on top of `SameSite=Lax` cookies). Every response carries `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS and `Permissions-Policy`; HTML also gets a Content-Security-Policy (inline scripts are still allowed because the pages use them).
+- Each user keeps at most 10 active sessions, 5 API keys and 30 scripts. Expired sessions and access logs older than 90 days are pruned automatically; page-view logging is limited to one row per IP every 30 seconds.
+- A blocked account is only revealed to someone who also knows its password. Blocked users' API keys stop working for the loader.
+
+### Cloudflare plan note
+
+Hashing a password (100,000 PBKDF2 iterations) and obfuscating a script both use real CPU time. The Workers Free plan allows only 10 ms CPU per request, so login, signup and obfuscation may fail there with error 1102; use Workers Paid for production.
