@@ -170,28 +170,18 @@ async function api(request, env, url) {
     const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || ""), invite = String(data.inviteCode || ""), ownerSetupCode = String(data.ownerSetupCode || "");
     if (!validEmail(email)) return json({ error: "올바른 이메일 주소를 입력하세요." }, 400);
     if (password.length < 10 || password.length > 200) return json({ error: "비밀번호는 10~200자여야 합니다." }, 400);
-    // Bootstrap: while the users table is still completely empty, the very first signup skips
-    // the invite code and becomes the owner automatically. This window closes itself the moment
-    // that first account exists (userCount stops being 0), so it needs no manual cleanup later.
-    // Fails closed (isBootstrap stays false, invite code still required) if the count query
-    // errors or doesn't come back as an explicit 0 — this check must never fail open.
-    let isBootstrap = false;
-    try {
-      const userCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first();
-      isBootstrap = Boolean(userCount) && Number(userCount.count) === 0;
-    } catch {}
-    if (!isBootstrap && (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE))) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
+    if (!env.INVITE_CODE || !safeEqual(invite, env.INVITE_CODE)) { await logAccess(env, request, "signup", "failed", "Invalid invite code"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
     // The owner/developer code is only valid together with OWNER_EMAIL. The owner email cannot be
     // registered without it, and the code is rejected for every other email. The error is the same
     // in every case so it never reveals which email is the owner's.
     const ownerEmail = String(env.OWNER_EMAIL || "").trim().toLowerCase();
     const isOwnerEmail = Boolean(ownerEmail) && email === ownerEmail;
     const ownerCodeOk = Boolean(env.OWNER_SETUP_CODE) && ownerSetupCode !== "" && safeEqual(ownerSetupCode, env.OWNER_SETUP_CODE);
-    if (!isBootstrap && (isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
+    if ((isOwnerEmail || ownerSetupCode !== "") && !(isOwnerEmail && ownerCodeOk)) { await logAccess(env, request, "signup", "failed", "Owner/developer code rejected"); return json({ error: "초대 코드 또는 설정 코드가 올바르지 않습니다." }, 403); }
     const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
     if (exists) { await logAccess(env, request, "signup", "failed", "Email already exists"); return json({ error: "이미 가입된 이메일입니다." }, 409); }
     const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
-    const role = isBootstrap ? "owner" : (isOwnerEmail && ownerCodeOk ? "owner" : "user");
+    const role = isOwnerEmail && ownerCodeOk ? "owner" : "user";
     try {
       await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status,last_ip,last_login_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active", ip, now).run();
     } catch (e) {
@@ -277,28 +267,6 @@ async function api(request, env, url) {
     if (path === "/api/admin/users" && method === "GET") {
       const rows = await env.DB.prepare("SELECT id,email,role,status,created_at,last_login_at,last_ip FROM users ORDER BY created_at DESC LIMIT 500").all();
       return json({ users: rows.results || [] });
-    }
-    // Owner-only account creation: no invite code involved. This is already gated behind a
-    // logged-in session with the owner role plus the OWNER_SETUP_CODE dev-unlock above, so it
-    // is effectively "only I can use this" without needing a separate public invite flow.
-    if (path === "/api/admin/users" && method === "POST") {
-      if (user.role !== "owner") return json({ error: "계정 생성은 소유자만 할 수 있습니다." }, 403);
-      let data; try { data = await bodyJson(request, 4000); } catch (e) { return json({ error: e.message }, 400); }
-      const email = String(data.email || "").trim().toLowerCase(), password = String(data.password || "");
-      const role = ["admin", "user"].includes(data.role) ? data.role : "user";
-      if (!validEmail(email)) return json({ error: "올바른 이메일 주소를 입력하세요." }, 400);
-      if (password.length < 10 || password.length > 200) return json({ error: "비밀번호는 10~200자여야 합니다." }, 400);
-      const exists = await env.DB.prepare("SELECT id FROM users WHERE email=? LIMIT 1").bind(email).first();
-      if (exists) return json({ error: "이미 가입된 이메일입니다." }, 409);
-      const { salt, hash } = await passwordHash(password), id = await newUserId(env.DB), now = Date.now();
-      try {
-        await env.DB.prepare("INSERT INTO users (id,email,password_salt,password_hash,created_at,role,status) VALUES (?,?,?,?,?,?,?)").bind(id, email, salt, hash, now, role, "active").run();
-      } catch (e) {
-        if (/UNIQUE|constraint/i.test(String(e?.message))) return json({ error: "이미 가입된 이메일입니다." }, 409);
-        throw e;
-      }
-      await logAccess(env, request, "admin_user_create", "success", `actor=${user.id};new_user=${id};role=${role}`);
-      return json({ ok: true, user: { id, email, role } }, 201);
     }
     if (path === "/api/admin/visitors" && method === "GET") {
       const rows = await env.DB.prepare("SELECT id,ip,event,outcome,reason,user_agent,created_at FROM access_logs ORDER BY created_at DESC LIMIT 500").all();
