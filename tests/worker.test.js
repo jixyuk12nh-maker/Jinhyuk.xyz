@@ -57,3 +57,31 @@ test("API rejects empty source", async () => {
   });
   assert.equal(response.status, 400);
 });
+
+
+test("health rejects non-GET methods", async () => {
+  const response = await call("/health", { method: "POST" });
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "GET, HEAD");
+});
+
+test("API requires JSON content type", async () => {
+  const response = await call("/api/deobfuscate", {
+    method: "POST",
+    headers: { "x-access-key": env.SITE_ACCESS_KEY, "content-type": "text/plain" },
+    body: "source=return%201",
+  });
+  assert.equal(response.status, 415);
+});
+
+test("API rejects a source larger than 2 MiB", async () => {
+  const source = "a".repeat(2 * 1024 * 1024 + 1);
+  const response = await call("/api/deobfuscate", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-access-key": env.SITE_ACCESS_KEY },
+    body: JSON.stringify({ source, version: "14.7" }),
+  });
+  assert.equal(response.status, 413);
+  const body = await response.json();
+  assert.equal(body.code, "SOURCE_TOO_LARGE");
+});
