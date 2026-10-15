@@ -243,11 +243,11 @@ async function api(request, env, url) {
     const db = await getDb(env), ip = clientIp(request);
     if (failCount(ip) >= MAX_FAILS_PER_IP) return tooMany();
     const { email, password } = await credentials(request);
-    const row = await db.prepare("SELECT id,email,password_salt,password_hash FROM accounts WHERE email=? LIMIT 1").bind(email).first();
+    const row = await db.prepare("SELECT id,email,role,password_salt,password_hash FROM accounts WHERE email=? LIMIT 1").bind(email).first();
     const check = await passwordHash(password, row ? row.password_salt : DUMMY_SALT);
     if (!row || !safeEqual(check.hash, row.password_hash)) { addFailure(ip); return json({ error: "이메일 또는 비밀번호가 올바르지 않습니다." }, 401); }
     const token = await startSession(db, row.id);
-    return json({ ok: true, user: { id: row.id, email: row.email } }, 200, { "Set-Cookie": sessionCookie(token) });
+    return json({ ok: true, user: { id: row.id, email: row.email, role: ROLES.has(row.role) ? row.role : "user" } }, 200, { "Set-Cookie": sessionCookie(token) });
   }
 
   if (path === "/api/auth/logout" && method === "POST") {
@@ -333,7 +333,7 @@ async function api(request, env, url) {
     if (new TextEncoder().encode(data.source).byteLength > MAX_SOURCE_BYTES[mode]) return json({ error: `소스가 너무 큽니다. ${mode === "vm" ? "VM" : "호환성"} 모드 한도는 ${formatLimit(MAX_SOURCE_BYTES[mode])}입니다.` }, 413);
     try {
       const language = data.language === "luau" ? "luau" : "lua";
-      const output = mode === "vm" ? compileLuaVm(data.source, { language }) : compileLuaSubset(data.source, { language, renameLocals: true });
+      const output = mode === "vm" ? compileLuaVm(data.source, { language }) : compileLuaSubset(data.source, { language, renameLocals: data.renameLocals === true });
       return json({ output, language, mode, note: mode === "vm" ? "실험적 VM 모드입니다. 실제 실행 환경에서 반드시 테스트하세요. 실행이 느려질 수 있고 모든 Luau 기능을 지원하지는 않습니다." : "호환성 모드는 변환 가능한 문자열과 주석을 처리하고 지역 변수 이름을 보수적으로 바꿉니다. 완전한 VM 가상화는 아닙니다." });
     } catch (e) { return json({ error: e?.message || "변환에 실패했습니다." }, 400); }
   }
@@ -359,6 +359,8 @@ function withSecurityHeaders(response) {
 const DASHBOARD_PATHS = new Set(["/dashboard", "/dashboard/", "/dashboard.html"]);
 const ADMIN_PATHS = new Set(["/admin", "/admin/", "/admin.html"]);
 const AUTH_PATHS = new Set(["/auth", "/auth/", "/auth.html"]);
+// 같은 페이지를 다른 경로로 보여 줄 때 사용합니다(요청 경로는 그대로 두고 파일만 바꿉니다).
+const pageAt = (request, env, file) => env.ASSETS.fetch(new Request(new URL(file, request.url), request));
 const redirect = (to) => new Response(null, { status: 302, headers: { Location: to, "Cache-Control": "no-store" } });
 async function accountOrNull(request, env) {
   try { return await currentAccount(request, env); }
@@ -377,7 +379,7 @@ async function handle(request, env, ctx) {
     const account = await accountOrNull(request, env);
     if (!account) return redirect("/auth");
     if (account.role !== "admin") return redirect("/dashboard");
-    const asset = await env.ASSETS.fetch(request);
+    const asset = await pageAt(request, env, "/dashboard.html");
     const page = new Response(asset.body, asset);
     page.headers.set("Cache-Control", "private, no-store");
     return page;
@@ -391,7 +393,10 @@ async function handle(request, env, ctx) {
   }
   if (isRead && (path === "/login" || path === "/login/")) return redirect("/login.html");
   if (isRead && (path === "/register" || path === "/register/")) return redirect("/register.html");
-  if (isRead && AUTH_PATHS.has(path) && cookieValue(request, "lm_session") && await accountOrNull(request, env)) return redirect("/dashboard");
+  if (isRead && AUTH_PATHS.has(path)) {
+    if (cookieValue(request, "lm_session") && await accountOrNull(request, env)) return redirect("/dashboard");
+    return pageAt(request, env, "/login.html");
+  }
   return env.ASSETS.fetch(request);
 }
 
