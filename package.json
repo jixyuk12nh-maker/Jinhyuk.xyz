@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test",
-    "create-account": "node scripts/create-account.mjs"
+    "create-account": "node scripts/create-account.mjs",
+    "repair-db": "node scripts/repair-db.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"
