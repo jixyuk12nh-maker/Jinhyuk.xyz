@@ -1,67 +1,149 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import worker from "./index.js";
 
-const SECRET = "setup-secret";
-
-// Minimal fake D1: `first(sql, args)` lets a test decide what a SELECT returns.
-function fakeEnv({ first = () => null, ...extra } = {}) {
-  const writes = [], reads = [];
-  const statement = (sql) => {
-    const make = (args) => ({
-      first: async () => { reads.push({ sql, args }); return first(sql, args); },
-      run: async () => { writes.push({ sql, args }); return { meta: { changes: 1 } }; },
-      all: async () => ({ results: [] })
-    });
-    return { ...make([]), bind: (...args) => make(args) };
-  };
+// D1 흉내: 진짜 SQLite(node:sqlite)에 SQL을 그대로 실행하므로 스키마와 쿼리까지 함께 검증됩니다.
+function fakeD1(db) {
+  // D1처럼 SQL은 실행하는 순간에 컴파일합니다(batch 안에서 앞 문장이 만든 테이블을 뒤 문장이 쓸 수 있도록).
+  const wrap = (sql, args) => ({
+    first: async () => db.prepare(sql).get(...args) ?? null,
+    all: async () => ({ results: db.prepare(sql).all(...args) }),
+    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...args).changes) } })
+  });
   return {
-    DB: { prepare: statement, batch: async () => [] },
-    ASSETS: { fetch: async () => new Response("asset") },
-    INVITE_CODE: "invite-code",
-    writes, reads,
-    ...extra
+    prepare: (sql) => ({ ...wrap(sql, []), bind: (...args) => wrap(sql, args) }),
+    batch: async (stmts) => { for (const s of stmts) await s.run(); return []; }
   };
 }
-const req = (path, { method = "GET", ip = "203.0.113.1", headers = {}, body } = {}) =>
+const newEnv = (extra = {}) => {
+  const raw = new DatabaseSync(":memory:");
+  return { raw, DB: fakeD1(raw), INVITE_CODE: "invite-code", ASSETS: { fetch: async () => new Response("asset") }, ...extra };
+};
+let ipCounter = 0;
+const nextIp = () => `203.0.113.${++ipCounter % 250}`;
+const req = (path, { method = "GET", ip = nextIp(), headers = {}, body } = {}) =>
   new Request("https://jinhyuk.xyz" + path, {
     method,
     headers: { "cf-connecting-ip": ip, ...(body ? { "Content-Type": "application/json" } : {}), ...headers },
     body: body ? JSON.stringify(body) : undefined
   });
-const signup = (env, email, extra = {}, ip = "203.0.113.10") =>
-  worker.fetch(req("/api/auth/signup", { method: "POST", ip, body: { email, password: "correct-horse-battery", inviteCode: "invite-code", ...extra } }), env);
-const login = (env, ip, email = "x@example.com") =>
-  worker.fetch(req("/api/auth/login", { method: "POST", ip, body: { email, password: "wrong-password" } }), env);
+const call = (env, path, opts) => worker.fetch(req(path, opts), env);
+const PASSWORD = "correct-horse-battery";
+const signup = (env, email = "a@example.com", extra = {}, ip) =>
+  call(env, "/api/auth/signup", { method: "POST", ip, body: { email, password: PASSWORD, inviteCode: "invite-code", ...extra } });
+const login = (env, email = "a@example.com", password = PASSWORD, ip) =>
+  call(env, "/api/auth/login", { method: "POST", ip, body: { email, password } });
+const cookieOf = (res) => res.headers.get("set-cookie").split(";")[0];
 
-// A logged-in session (cookie lm_session=abc) with the given role; extra() can override any SELECT.
-const asUser = (role, extra = () => undefined) => (sql, args) => {
-  const r = extra(sql, args);
-  if (r !== undefined) return r;
-  if (/FROM sessions JOIN users/.test(sql)) return { id: "OWN01", email: "o@example.com", role, status: "active" };
-  if (/COUNT\(\*\)/.test(sql)) return { count: 0 };
-  return null;
-};
-const SESSION = "lm_session=abc";
-async function unlock(env, ip = "203.0.113.1", cookie = SESSION) {
-  const res = await worker.fetch(req("/api/admin/unlock", { method: "POST", ip, headers: { Cookie: cookie }, body: { code: SECRET } }), env);
-  assert.equal(res.status, 200);
-  return `${cookie}; lm_dev=${res.headers.get("set-cookie").match(/lm_dev=([^;]+)/)[1]}`;
-}
-const adminEnv = (role, extra) => fakeEnv({ first: asUser(role, extra), OWNER_SETUP_CODE: SECRET });
+test("signup with the right invite code creates an account, logs in, and /api/me works", async () => {
+  const env = newEnv();
+  const res = await signup(env, "New@Example.com");
+  assert.equal(res.status, 201);
+  assert.match(res.headers.get("set-cookie"), /HttpOnly; Secure; SameSite=Lax/);
+  assert.equal((await res.json()).user.email, "new@example.com");
+  const me = await call(env, "/api/me", { headers: { Cookie: cookieOf(res) } });
+  assert.equal(me.status, 200);
+  assert.equal((await me.json()).email, "new@example.com");
+});
 
-// ---------- basics ----------
+test("signup errors are specific: wrong invite 403, duplicate 409, bad input 400", async () => {
+  const env = newEnv();
+  assert.equal((await signup(env, "a@example.com", { inviteCode: "nope" })).status, 403);
+  assert.equal((await signup(env, "a@example.com")).status, 201);
+  assert.equal((await signup(env, "A@EXAMPLE.COM")).status, 409);
+  assert.equal((await signup(env, "not-an-email")).status, 400);
+  assert.equal((await signup(env, "b@example.com", { password: "short" })).status, 400);
+});
+
+test("signup says so clearly when INVITE_CODE is not configured", async () => {
+  const env = newEnv({ INVITE_CODE: undefined });
+  const res = await signup(env);
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error, /INVITE_CODE/);
+});
+
+test("login works with the right password and fails with a generic 401 otherwise", async () => {
+  const env = newEnv();
+  await signup(env);
+  const ok = await login(env);
+  assert.equal(ok.status, 200);
+  assert.match(ok.headers.get("set-cookie"), /lm_session=/);
+  assert.equal((await login(env, "a@example.com", "wrong-password-123")).status, 401);
+  assert.equal((await login(env, "nobody@example.com")).status, 401);
+});
+
+test("logout removes the session", async () => {
+  const env = newEnv();
+  const cookie = cookieOf(await signup(env));
+  assert.equal((await call(env, "/api/me", { headers: { Cookie: cookie } })).status, 200);
+  const out = await call(env, "/api/auth/logout", { method: "POST", headers: { Cookie: cookie } });
+  assert.equal(out.status, 200);
+  assert.match(out.headers.get("set-cookie"), /Max-Age=0/);
+  assert.equal((await call(env, "/api/me", { headers: { Cookie: cookie } })).status, 401);
+});
+
+test("an IP is locked out after 5 failed logins or wrong invite codes", async () => {
+  const env = newEnv();
+  await signup(env);
+  for (let i = 0; i < 5; i++) assert.equal((await login(env, "a@example.com", "wrong-password-123", "198.51.100.7")).status, 401);
+  assert.equal((await login(env, "a@example.com", PASSWORD, "198.51.100.7")).status, 429);
+  for (let i = 0; i < 5; i++) assert.equal((await signup(env, "x@example.com", { inviteCode: "bad" }, "198.51.100.8")).status, 403);
+  assert.equal((await signup(env, "x@example.com", {}, "198.51.100.8")).status, 429);
+});
+
+test("/dashboard needs a login (server-side), and /auth bounces logged-in users to it", async () => {
+  const env = newEnv();
+  for (const path of ["/dashboard", "/dashboard.html", "/dashboard/"]) {
+    const res = await call(env, path);
+    assert.equal(res.status, 302, path);
+    assert.equal(res.headers.get("location"), "/auth");
+  }
+  const cookie = cookieOf(await signup(env));
+  const page = await call(env, "/dashboard", { headers: { Cookie: cookie } });
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("cache-control"), /no-store/);
+  const auth = await call(env, "/auth", { headers: { Cookie: cookie } });
+  assert.equal(auth.status, 302);
+  assert.equal(auth.headers.get("location"), "/dashboard");
+  assert.equal((await call(env, "/auth")).status, 200);
+});
+
+test("a database that is missing the tables (or has an old users table) fixes itself on the first request", async () => {
+  const env = newEnv();
+  env.raw.exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT); CREATE TABLE api_keys (id TEXT); CREATE TABLE scripts (id TEXT);");
+  const res = await signup(env);
+  assert.equal(res.status, 201);
+  const tables = env.raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+  assert.ok(tables.includes("accounts") && tables.includes("account_sessions"));
+});
+
+test("health reports database, schema and invite-code status", async () => {
+  const body = await (await call(newEnv(), "/api/health")).json();
+  assert.deepEqual([body.ok, body.database, body.schema, body.inviteCodeSet], [true, true, true, true]);
+  const none = await (await call(newEnv({ DB: undefined, INVITE_CODE: undefined }), "/api/health")).json();
+  assert.deepEqual([none.database, none.schema, none.inviteCodeSet], [false, false, false]);
+});
+
+test("without a DB binding the auth API answers 503 JSON instead of crashing", async () => {
+  const res = await login(newEnv({ DB: undefined }));
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error, /DB/);
+});
+
 test("a malformed session cookie does not crash the API", async () => {
-  const res = await worker.fetch(req("/api/me", { headers: { Cookie: "lm_session=%E0%A4%A" } }), fakeEnv());
+  const res = await call(newEnv(), "/api/me", { headers: { Cookie: "lm_session=%E0%A4%A" } });
   assert.equal(res.status, 401);
   assert.equal((await res.json()).authenticated, false);
 });
 
 test("unexpected errors return JSON 500 for API routes", async () => {
-  const env = fakeEnv();
+  const env = newEnv();
+  await signup(env);
   env.DB.prepare = () => { throw new Error("boom"); };
-  const res = await login(env, "198.51.100.88");
+  env.DB.batch = async () => {};
+  const res = await login(env);
   assert.equal(res.status, 500);
   assert.equal((await res.json()).error, "서버 내부 오류가 발생했습니다.");
 });
@@ -73,185 +155,30 @@ test("PBKDF2 stays within the 100,000 iteration cap Cloudflare Workers enforce",
   assert.equal(/iterations:\s*\d{4,}/.test(src), false, "no hard-coded iteration count may bypass the constant");
 });
 
-// ---------- signup / owner code ----------
-test("the owner email cannot be registered without the owner code", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "Owner@Example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "owner@example.com");
-  assert.equal(res.status, 403);
-  assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
-});
-
-test("the owner email wrong code and non-owner emails with a code all get the same generic error", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const a = await signup(env, "owner@example.com", { ownerSetupCode: "wrong" }, "203.0.113.20");
-  const b = await signup(env, "someone@example.com", { ownerSetupCode: SECRET }, "203.0.113.21");
-  const c = await signup(env, "someone@example.com", { inviteCode: "wrong" }, "203.0.113.22");
-  for (const res of [a, b, c]) { assert.equal(res.status, 403); assert.equal((await res.json()).error, "초대 코드 또는 설정 코드가 올바르지 않습니다."); }
-  assert.equal(env.writes.some((w) => /INSERT INTO users/.test(w.sql)), false);
-});
-
-test("the owner email with the correct owner code becomes owner", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "owner@example.com", { ownerSetupCode: SECRET }, "203.0.113.11");
-  assert.equal(res.status, 201);
-  assert.ok(env.writes.find((w) => /INSERT INTO users/.test(w.sql)).args.includes("owner"));
-});
-
-test("an ordinary signup (no owner code) creates a normal user", async () => {
-  const env = fakeEnv({ OWNER_EMAIL: "owner@example.com", OWNER_SETUP_CODE: SECRET });
-  const res = await signup(env, "someone@example.com", {}, "203.0.113.12");
-  assert.equal(res.status, 201);
-  const insert = env.writes.find((w) => /INSERT INTO users/.test(w.sql));
-  assert.ok(insert.args.includes("user") && !insert.args.includes("owner"));
-});
-
-test("signup locks an IP after repeated failures (shared across Worker instances via D1)", async () => {
-  const env = fakeEnv({ first: (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 5 } : null) });
-  assert.equal((await signup(env, "a@example.com", {}, "203.0.113.30")).status, 429);
-});
-
-// ---------- login ----------
-test("login locks an IP after 5 failed attempts in 15 minutes", async () => {
-  const env = fakeEnv({ first: (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 5 } : null) });
-  const res = await login(env, "198.51.100.77");
-  assert.equal(res.status, 429);
-  assert.equal(res.headers.get("retry-after"), "900");
-});
-
-test("a failed login below the limit is a plain 401 and is recorded", async () => {
-  const env = fakeEnv({ first: (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 4 } : null) });
-  const res = await login(env, "198.51.100.78");
-  assert.equal(res.status, 401);
-  assert.ok(env.writes.some((w) => /INSERT INTO access_logs/.test(w.sql) && w.args.includes("failed")));
-});
-
-test("an account is locked after 10 failures even when they come from many IPs", async () => {
-  const user = { id: "U0001", email: "x@example.com", password_salt: "00", password_hash: "bad", role: "user", status: "active" };
-  const env = fakeEnv({ first: (sql) => (/FROM users WHERE email=/.test(sql) ? user : /COUNT\(\*\)/.test(sql) ? { count: /reason=\?/.test(sql) ? 10 : 0 } : null) });
-  assert.equal((await login(env, "198.51.100.79")).status, 429);
-});
-
-test("a blocked account is only revealed to someone who knows the password", async () => {
-  const user = { id: "U0002", email: "x@example.com", password_salt: "00", password_hash: "bad", role: "user", status: "blocked" };
-  const env = fakeEnv({ first: (sql) => (/FROM users WHERE email=/.test(sql) ? user : /COUNT\(\*\)/.test(sql) ? { count: 0 } : null) });
-  assert.equal((await login(env, "198.51.100.80")).status, 401);
-});
-
-test("logout clears both the session and the developer unlock cookies", async () => {
-  const res = await worker.fetch(req("/api/auth/logout", { method: "POST", headers: { Cookie: SESSION } }), fakeEnv());
-  const cookies = res.headers.getSetCookie().join("\n");
-  assert.match(cookies, /lm_session=;/);
-  assert.match(cookies, /lm_dev=;/);
-});
-
-// ---------- IP blacklist ----------
-test("blacklisted IPs are blocked on extensionless pages and on API routes", async () => {
-  const env = fakeEnv({ first: (sql) => (/FROM ip_blacklist/.test(sql) ? { ip: "x" } : null) });
-  assert.equal((await worker.fetch(req("/dashboard", { ip: "192.0.2.50" }), env)).status, 403);
-  assert.equal((await worker.fetch(req("/api/me", { ip: "192.0.2.50" }), env)).status, 403);
-  assert.equal((await worker.fetch(req("/api/health", { ip: "192.0.2.50" }), env)).status, 200);
-});
-
-test("static files bypass the database", async () => {
-  const env = fakeEnv();
-  const res = await worker.fetch(req("/style.css"), env);
-  assert.equal(await res.text(), "asset");
-  assert.equal(env.reads.length + env.writes.length, 0);
-});
-
-test("page-view logging is throttled per IP so page floods cannot burn D1 writes", async () => {
-  const env = fakeEnv();
-  for (let i = 0; i < 5; i++) await worker.fetch(req("/", { ip: "192.0.2.99" }), env);
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(env.writes.filter((w) => /INSERT INTO access_logs/.test(w.sql)).length, 1);
-});
-
-// ---------- Developer Studio ----------
-test("/developer requires an owner/admin session", async () => {
-  for (const path of ["/developer", "/developer.html"]) {
-    const res = await worker.fetch(req(path), fakeEnv());
-    assert.equal(res.status, 302);
-    assert.match(res.headers.get("location"), /\/auth\.html$/);
-  }
-});
-
-test("admin APIs need the developer code even for a signed-in owner", async () => {
-  const env = adminEnv("owner");
-  const noCode = await worker.fetch(req("/api/admin/overview", { headers: { Cookie: SESSION } }), env);
-  assert.equal(noCode.status, 403);
-  assert.equal((await noCode.json()).needsUnlock, true);
-
-  const wrong = await worker.fetch(req("/api/admin/unlock", { method: "POST", headers: { Cookie: SESSION }, body: { code: "nope" } }), env);
-  assert.equal(wrong.status, 403);
-  assert.equal(wrong.headers.get("set-cookie"), null);
-
-  const cookie = await unlock(env);
-  assert.equal((await worker.fetch(req("/api/admin/overview", { headers: { Cookie: cookie } }), env)).status, 200);
-  assert.equal((await (await worker.fetch(req("/api/admin/status", { headers: { Cookie: cookie } }), env)).json()).unlocked, true);
-});
-
-test("the developer unlock cookie is bound to the session and cannot be tampered with", async () => {
-  const env = adminEnv("owner");
-  const cookie = await unlock(env);
-  const dev = cookie.split("lm_dev=")[1];
-  const otherSession = await worker.fetch(req("/api/admin/overview", { headers: { Cookie: `lm_session=zzz; lm_dev=${dev}` } }), env);
-  assert.equal(otherSession.status, 403);
-  const forged = await worker.fetch(req("/api/admin/overview", { headers: { Cookie: `${SESSION}; lm_dev=${Date.now() + 3600000}.${"0".repeat(64)}` } }), env);
-  assert.equal(forged.status, 403);
-  const expired = await worker.fetch(req("/api/admin/overview", { headers: { Cookie: `${SESSION}; lm_dev=${Date.now() - 1000}.${dev.split(".")[1]}` } }), env);
-  assert.equal(expired.status, 403);
-});
-
-test("unlock is refused when the server has no OWNER_SETUP_CODE, and failures are throttled", async () => {
-  const none = fakeEnv({ first: asUser("owner") });
-  assert.equal((await worker.fetch(req("/api/admin/unlock", { method: "POST", headers: { Cookie: SESSION }, body: { code: "x" } }), none)).status, 503);
-  const locked = fakeEnv({ first: asUser("owner", (sql) => (/COUNT\(\*\)/.test(sql) ? { count: 5 } : undefined)), OWNER_SETUP_CODE: SECRET });
-  assert.equal((await worker.fetch(req("/api/admin/unlock", { method: "POST", headers: { Cookie: SESSION }, body: { code: SECRET } }), locked)).status, 429);
-});
-
-test("admins cannot block other admins; only the owner can", async () => {
-  const env = adminEnv("admin", (sql) => (/SELECT id,role FROM users WHERE id=\?/.test(sql) ? { id: "ADM02", role: "admin" } : undefined));
-  const cookie = await unlock(env);
-  const res = await worker.fetch(req("/api/admin/users/ADM02/block", { method: "POST", headers: { Cookie: cookie }, body: {} }), env);
-  assert.equal(res.status, 403);
-  assert.match((await res.json()).error, /소유자/);
-});
-
-test("blacklist: bad %-encoding gives 400, and the owner cannot block their own IP", async () => {
-  const env = adminEnv("owner");
-  const cookie = await unlock(env, "203.0.113.1");
-  assert.equal((await worker.fetch(req("/api/admin/blacklist/%E0%A4%A", { method: "DELETE", headers: { Cookie: cookie } }), env)).status, 400);
-  assert.equal((await worker.fetch(req("/api/admin/blacklist", { method: "POST", headers: { Cookie: cookie }, body: { ip: "203.0.113.1" } }), env)).status, 400);
-  assert.equal((await worker.fetch(req("/api/admin/blacklist", { method: "POST", headers: { Cookie: cookie }, body: { ip: "198.51.100.9" } }), env)).status, 201);
-});
-
-// ---------- misc hardening ----------
 test("cross-origin state-changing requests are rejected", async () => {
-  const env = fakeEnv({ first: asUser("user") });
-  const res = await worker.fetch(req("/api/keys", { method: "POST", headers: { Cookie: SESSION, Origin: "https://evil.example" }, body: {} }), env);
-  assert.equal(res.status, 403);
-  const same = await worker.fetch(req("/api/keys", { method: "POST", headers: { Cookie: SESSION, Origin: "https://jinhyuk.xyz" }, body: {} }), env);
-  assert.equal(same.status, 201);
+  const env = newEnv();
+  const evil = await call(env, "/api/auth/login", { method: "POST", headers: { Origin: "https://evil.example" }, body: { email: "a@example.com", password: PASSWORD } });
+  assert.equal(evil.status, 403);
+  const same = await call(env, "/api/auth/login", { method: "POST", headers: { Origin: "https://jinhyuk.xyz" }, body: { email: "a@example.com", password: PASSWORD } });
+  assert.equal(same.status, 401);
 });
 
-test("every response carries security headers, and HTML also gets a CSP", async () => {
-  const env = fakeEnv({ ASSETS: { fetch: async () => new Response("<html></html>", { headers: { "Content-Type": "text/html; charset=utf-8" } }) } });
-  const page = await worker.fetch(req("/auth.html"), env);
-  assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+test("every response carries security headers, and HTML also gets a CSP with Google Fonts", async () => {
+  const env = newEnv({ ASSETS: { fetch: async () => new Response("<html></html>", { headers: { "Content-Type": "text/html; charset=utf-8" } }) } });
+  const page = await call(env, "/auth.html");
+  const csp = page.headers.get("content-security-policy");
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /style-src [^;]*https:\/\/fonts\.googleapis\.com/);
+  assert.match(csp, /font-src [^;]*https:\/\/fonts\.gstatic\.com/);
   assert.equal(page.headers.get("x-frame-options"), "DENY");
-  const api = await worker.fetch(req("/api/health"), env);
+  const api = await call(env, "/api/health");
   assert.equal(api.headers.get("x-content-type-options"), "nosniff");
   assert.equal(api.headers.get("content-security-policy"), null);
 });
 
-test("saved scripts are capped per user", async () => {
-  const env = fakeEnv({ first: asUser("user", (sql) => (/FROM scripts WHERE user_id=\?/.test(sql) ? { count: 30 } : undefined)) });
-  const res = await worker.fetch(req("/api/scripts", { method: "POST", headers: { Cookie: SESSION }, body: { name: "a.lua", source: "print(1)" } }), env);
-  assert.equal(res.status, 409);
-});
-
-test("obfuscation size limits depend on the mode and are enforced before compiling", async () => {
-  const post = (ip, body) => worker.fetch(req("/api/obfuscate", { method: "POST", ip, body }), fakeEnv());
+test("obfuscation still works without any database, and its size limits depend on the mode", async () => {
+  const env = newEnv({ DB: undefined });
+  const post = (ip, body) => call(env, "/api/obfuscate", { method: "POST", ip, body });
   const big = "print(1)\n".repeat(20000); // ~176 KiB
   assert.equal((await post("198.51.100.101", { source: big, mode: "vm" })).status, 413);
   assert.equal((await post("198.51.100.102", { source: "x".repeat(3 * 1024 * 1024), mode: "compatibility" })).status, 413);
@@ -260,23 +187,7 @@ test("obfuscation size limits depend on the mode and are enforced before compili
   assert.equal(typeof (await ok.json()).output, "string");
 });
 
-test("accounts created before the 5-character ID change can still be managed by admins", async () => {
-  const legacyId = "9f2c1a7e4b6d8031a5c7e9f0";
-  const env = adminEnv("owner", (sql) => (/SELECT id,role FROM users WHERE id=\?/.test(sql) ? { id: legacyId, role: "user" } : undefined));
-  const cookie = await unlock(env);
-  const res = await worker.fetch(req(`/api/admin/users/${legacyId}/block`, { method: "POST", headers: { Cookie: cookie }, body: {} }), env);
-  assert.equal(res.status, 200);
-});
-
-test("oversized JSON bodies still return 413 after the error messages were localised", async () => {
-  const env = fakeEnv({ first: asUser("user") });
-  const res = await worker.fetch(req("/api/scripts", { method: "POST", headers: { Cookie: SESSION }, body: { name: "a.lua", source: "x".repeat(1_200_000) } }), env);
+test("oversized JSON bodies return 413", async () => {
+  const res = await call(newEnv(), "/api/obfuscate", { method: "POST", body: { source: "x".repeat(4_500_000) } });
   assert.equal(res.status, 413);
-});
-
-test("the CSP allows the Google Fonts used by the home page", async () => {
-  const env = fakeEnv({ ASSETS: { fetch: async () => new Response("<html></html>", { headers: { "Content-Type": "text/html; charset=utf-8" } }) } });
-  const csp = (await worker.fetch(req("/"), env)).headers.get("content-security-policy");
-  assert.match(csp, /style-src [^;]*https:\/\/fonts\.googleapis\.com/);
-  assert.match(csp, /font-src [^;]*https:\/\/fonts\.gstatic\.com/);
 });
