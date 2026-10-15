@@ -101,7 +101,7 @@ async function logAccess(env, request, event, outcome, reason = "") {
   try {
     await env.DB.prepare("INSERT INTO access_logs (ip,event,outcome,reason,user_agent,created_at) VALUES (?,?,?,?,?,?)")
       .bind(clientIp(request), String(event).slice(0, 80), String(outcome).slice(0, 40), String(reason).slice(0, 300), String(request.headers.get("user-agent") || "").slice(0, 300), Date.now()).run();
-  } catch {}
+  } catch (e) { console.error("logAccess failed (access_logs table missing?):", e?.message); }
 }
 function validEmail(email) { return typeof email === "string" && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 const DUMMY_SALT = "0".repeat(32);
@@ -140,11 +140,11 @@ async function countFailures(env, event, { ip, reason }) {
       ? await env.DB.prepare("SELECT COUNT(*) AS count FROM access_logs WHERE event=? AND outcome='failed' AND reason=? AND created_at>?").bind(event, reason, since).first()
       : await env.DB.prepare("SELECT COUNT(*) AS count FROM access_logs WHERE ip=? AND event=? AND outcome='failed' AND created_at>?").bind(ip, event, since).first();
     return Number(row?.count) || 0;
-  } catch { return 0; }
+  } catch (e) { console.error("countFailures failed (access_logs table missing?):", e?.message); return 0; }
 }
 const tooManyAttempts = () => json({ error: "실패 횟수가 너무 많습니다. 15분 후 다시 시도하세요." }, 429, { "Retry-After": "900" });
 async function isIpBlacklisted(env, ip) {
-  try { return Boolean(await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first()); } catch { return false; }
+  try { return Boolean(await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip=? LIMIT 1").bind(ip).first()); } catch (e) { console.error("isIpBlacklisted failed (ip_blacklist table missing?):", e?.message); return false; }
 }
 async function createSession(env, userId, now = Date.now()) {
   const token = randomToken();
