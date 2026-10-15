@@ -389,6 +389,8 @@ async function handle(request, env, ctx) {
     page.headers.set("Cache-Control", "private, no-store");
     return page;
   }
+  if (isRead && (path === "/login" || path === "/login/")) return redirect("/login.html");
+  if (isRead && (path === "/register" || path === "/register/")) return redirect("/register.html");
   if (isRead && AUTH_PATHS.has(path) && cookieValue(request, "lm_session") && await accountOrNull(request, env)) return redirect("/dashboard");
   return env.ASSETS.fetch(request);
 }
