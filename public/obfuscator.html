@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090909">
+  <meta name="description" content="Lua와 Luau 스크립트를 위한 난독화 작업공간 UI">
+  <title>난독화기 — jinhyuk.xyz</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+:root{color-scheme:dark;--bg:#080808;--edge:rgba(255,255,255,.3);--edge-soft:rgba(255,255,255,.16);--line:rgba(255,255,255,.13);--text:#f4f4f5;--muted:#a0a0a6;--dim:#77777e;--page:1080px;font-family:Manrope,"Noto Sans KR",system-ui,sans-serif}
+*{box-sizing:border-box}
+html{min-width:320px;scroll-behavior:smooth}
+body{min-height:100vh;margin:0;color:var(--text);background:radial-gradient(ellipse 560px 420px at 17% 12%,rgba(255,255,255,.105),transparent 70%),radial-gradient(ellipse 520px 420px at 90% 48%,rgba(205,210,218,.065),transparent 72%),linear-gradient(145deg,#080808,#101012 54%,#080808);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit}
+button{color:inherit;cursor:pointer}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid #fff;outline-offset:3px}
+
+.shell{width:min(var(--page),calc(100% - 44px));margin-inline:auto}
+.top-wrap{padding-top:14px}
+.topbar{height:64px;padding:0 13px 0 17px;display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid var(--edge);border-radius:15px;background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 18px 46px rgba(0,0,0,.34)}
+.brand{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:800;letter-spacing:.1px;white-space:nowrap}
+.brand-mark{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--edge-soft);border-radius:9px;background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.04));box-shadow:inset 0 1px rgba(255,255,255,.25);font-size:13px}
+.brand-name span{color:var(--muted)}
+.top-links{display:flex;align-items:center;gap:4px}
+.top-links a{padding:9px 11px;border:1px solid transparent;border-radius:9px;color:#a8a8ae;font-size:11px;transition:background .18s,color .18s}
+.top-links a:hover,.top-links a[aria-current="page"]{border-color:var(--edge-soft);background:rgba(255,255,255,.08);color:#fff}
+.top-links .top-action{margin-left:4px;border-color:rgba(255,255,255,.34);background:rgba(255,255,255,.07);color:#fff}
+
+.intro{padding:46px 0 23px}
+.eyebrow{margin:0 0 10px;color:#c7c7ca;font:9px "DM Mono",monospace;letter-spacing:1.4px}
+.intro h1{margin:0;font-size:clamp(27px,4vw,38px);line-height:1.2;letter-spacing:-1.5px}
+.intro p:last-child{max-width:610px;margin:10px 0 0;color:var(--muted);font-size:13px;line-height:1.8}
+
+.workspace{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start;padding-bottom:36px}
+.window{min-width:0;overflow:hidden;border:1px solid var(--edge);border-radius:15px;background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px rgba(255,255,255,.2),0 20px 55px rgba(0,0,0,.28)}
+.window-bar{height:45px;padding:0 14px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.035)}
+.dots{display:flex;gap:5px}
+.dots i{width:6px;height:6px;border-radius:50%;background:#666}
+.dots i:first-child{background:#ddd}
+.dots i:nth-child(2){background:#aaa}
+.file-name{margin-left:7px;color:#c5c5ca;font:9px "DM Mono",monospace}
+.window-state{margin-left:auto;color:#8f8f96;font:8px "DM Mono",monospace}
+.editor-head{padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.editor-head strong{font-size:11px;font-weight:650}
+.editor-head span{color:#8d8d93;font:9px "DM Mono",monospace}
+.editor-wrap{padding:0 12px 12px}
+.code-input{display:block;width:100%;min-height:370px;resize:vertical;padding:15px;border:1px solid var(--edge-soft);border-radius:11px;background:rgba(4,4,5,.55);color:#e3e3e7;font:11px/1.75 "DM Mono",ui-monospace,monospace;tab-size:2;outline:none}
+.code-input::placeholder{color:#72727a}
+.code-input:focus{border-color:rgba(255,255,255,.5);box-shadow:0 0 0 3px rgba(255,255,255,.07)}
+.editor-foot{padding:0 15px 13px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:#85858b;font:9px "DM Mono",monospace}
+.editor-actions{display:flex;gap:7px}
+.small-button{height:32px;padding:0 11px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--edge-soft);border-radius:8px;background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.035));color:#ddd;font-size:10px;cursor:pointer;transition:background .18s,border-color .18s}
+.small-button:hover:not(:disabled){border-color:rgba(255,255,255,.42);background:linear-gradient(135deg,rgba(255,255,255,.24),rgba(255,255,255,.06))}
+.small-button:disabled{opacity:.4;cursor:not-allowed}
+
+.side{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.panel{padding:15px;border:1px solid var(--edge-soft);border-radius:13px;background:linear-gradient(135deg,rgba(255,255,255,.1),rgba(255,255,255,.02) 55%,rgba(210,210,215,.05)),rgba(12,12,13,.3);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px rgba(255,255,255,.14),0 10px 30px rgba(0,0,0,.16)}
+.panel-title{margin:0 0 10px;font-size:12px;font-weight:700}
+.section-caption{margin:0 0 6px;color:#85858b;font-size:10px;line-height:1.6}
+.field-label{display:block;margin:12px 0 6px;color:#b8b8bd;font-size:10px;font-weight:600}
+.select{width:100%;height:38px;padding:0 10px;border:1px solid var(--edge-soft);border-radius:9px;background:#161618;color:#eee;font-size:11px;outline:none}
+.select:focus{border-color:rgba(255,255,255,.5)}
+.option-list{display:grid;margin-top:7px}
+.option{min-height:53px;padding:10px 0;display:flex;align-items:flex-start;gap:9px;border-bottom:1px solid var(--line);color:#d6d6da;font-size:10px;line-height:1.45;cursor:pointer}
+.option:last-child{border-bottom:0}
+.option input{width:14px;height:14px;flex:none;margin:2px 0 0;accent-color:#eee}
+.option-copy{min-width:0;flex:1}
+.option-copy-title{display:block;color:#eee;font-size:10px;font-weight:600}
+.option small{display:block;margin-top:3px;color:#85858b;font-size:9px}
+.recommend{flex:none;margin-left:auto;padding:3px 7px;border:1px solid var(--edge-soft);border-radius:999px;color:#aaa;font-size:8px;white-space:nowrap}
+.generate{width:100%;min-height:42px;margin-top:15px;border:1px solid rgba(255,255,255,.48);border-radius:10px;background:linear-gradient(135deg,rgba(255,255,255,.26),rgba(255,255,255,.07) 55%,rgba(215,215,220,.16));color:#fff;font-size:11px;font-weight:700;box-shadow:inset 0 1px rgba(255,255,255,.3),0 8px 24px rgba(0,0,0,.2);transition:background .18s,border-color .18s}
+.generate:hover{border-color:rgba(255,255,255,.62);background:linear-gradient(135deg,rgba(255,255,255,.36),rgba(255,255,255,.12) 55%,rgba(215,215,220,.24))}
+.notice{margin:10px 0 0;color:#85858b;font-size:9px;line-height:1.65}
+.notice strong{color:#bbb}
+
+.output{grid-column:1/-1}
+.output-actions{display:flex;align-items:center;gap:7px;margin-left:auto}
+.output-body{padding:14px}
+.output-empty{min-height:95px;display:grid;place-items:center;padding:18px;border:1px dashed var(--edge-soft);border-radius:10px;color:#85858b;font-size:11px;text-align:center;line-height:1.7}
+.output-code{width:100%;min-height:115px;resize:vertical;padding:12px;border:1px solid var(--edge-soft);border-radius:9px;background:rgba(3,3,4,.52);color:#ddd;font:10px/1.6 "DM Mono",monospace}
+
+.toast{position:fixed;right:18px;bottom:18px;z-index:20;max-width:calc(100vw - 36px);padding:11px 14px;border:1px solid var(--edge);border-radius:10px;background:rgba(28,28,30,.92);color:#eee;font-size:11px;box-shadow:0 12px 35px rgba(0,0,0,.35);opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .2s,transform .2s}
+.toast.show{opacity:1;transform:translateY(0)}
+.footer{padding:0 0 24px;color:#777;font-size:10px}
+.footer a{color:#aaa}
+
+@media(max-width:760px){
+  .shell{width:min(100% - 28px,560px)}
+  .intro{padding-top:34px}
+  .workspace{grid-template-columns:1fr}
+  .side{grid-template-columns:1fr}
+  .output{grid-column:auto}
+  .code-input{min-height:310px}
+}
+@media(max-width:520px){
+  .shell{width:calc(100% - 30px)}
+  .topbar{height:56px;padding:0 9px 0 11px;gap:8px}
+  .brand{font-size:15px}
+  .brand-mark{width:30px;height:30px}
+  .top-links{gap:2px}
+  .top-links a{padding:8px 7px;font-size:10px}
+  .top-links .top-action{margin-left:0}
+  .intro{padding-top:29px}
+  .intro p:last-child{font-size:12px}
+  .workspace{gap:10px}
+  .window{border-radius:13px}
+  .window-bar{height:40px}
+  .editor-head{padding-inline:12px}
+  .editor-wrap{padding-inline:9px}
+  .code-input{min-height:270px;padding:11px;font-size:10px}
+  .editor-foot{padding-inline:12px}
+  .panel{padding:13px}
+  .output-actions{gap:5px}
+  .footer{padding-bottom:18px}
+}
+@media(prefers-reduced-transparency:reduce){.topbar,.window,.panel{-webkit-backdrop-filter:none;backdrop-filter:none}}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+  <div class="shell top-wrap"><header class="topbar">
+    <a class="brand" href="index.html" aria-label="jinhyuk.xyz 메인"><span class="brand-mark">J</span><span class="brand-name">jinhyuk<span>.xyz</span></span></a>
+    <nav class="top-links" aria-label="주요 메뉴"><a href="index.html">홈</a><a href="obfuscator.html" aria-current="page">난독화기</a><a class="top-action" href="dashboard.html">작업공간 ↗</a></nav>
+  </header></div>
+  <main class="shell">
+    <section class="intro"><p class="eyebrow">LUA / LUAU · CODE WORKSPACE</p><h1>스크립트를 난독화하세요.</h1><p>코드를 넣고 방식을 고른 뒤 난독화하세요. 원본 코드는 서버에 저장되지 않습니다.</p></section>
+    <section class="workspace" aria-label="난독화 작업공간">
+      <section class="window editor" aria-label="스크립트 편집기">
+        <div class="window-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="file-name" id="fileName">untitled.lua</span><span class="window-state">SOURCE EDITOR</span></div>
+        <div class="editor-head"><strong>원문</strong><span id="languageLabel">LUA</span></div>
+        <div class="editor-wrap"><textarea class="code-input" id="sourceCode" spellcheck="false" aria-label="난독화할 Lua 또는 Luau 코드" placeholder="-- Lua / Luau 코드를 여기에 붙여넣으세요&#10;&#10;local function greet(name)&#10;  return 'Hello, ' .. name&#10;end&#10;&#10;print(greet('world'))"></textarea></div>
+        <div class="editor-foot"><span id="sourceStats">0 lines · 0 chars</span><div class="editor-actions"><label class="small-button" for="fileInput" style="display:inline-flex;align-items:center;cursor:pointer">파일 열기</label><input id="fileInput" type="file" accept=".lua,.luau,.txt,text/plain" hidden><button class="small-button" id="clearButton" type="button">비우기</button></div></div>
+      </section>
+      <aside class="side" aria-label="난독화 옵션">
+        <section class="panel options-panel"><h2 class="panel-title">난독화 설정</h2><p class="section-caption">실제 실행 환경에 맞춰 설정하세요. 기본 권장값을 유지하고 필요한 경우에만 조정하세요.</p>
+          <label class="field-label" for="targetVersion">Target Version</label><select class="select" id="targetVersion"><option value="" selected disabled>실행 환경 버전 선택</option><option value="lua51">Lua 5.1</option><option value="lua52">Lua 5.2</option><option value="lua53">Lua 5.3</option><option value="lua54">Lua 5.4</option><option value="luajit">LuaJIT</option><option value="luau">Roblox Luau</option></select>
+          <div class="option-list" role="radiogroup" aria-label="난독화 방식">
+            <label class="option"><input type="radio" name="mode" value="compatibility" checked><span class="option-copy"><span class="option-copy-title">호환성 모드</span><small>문자열과 주석을 암호화하고, 코드 구조는 그대로 둡니다.</small></span><span class="recommend">기본 권장</span></label>
+            <label class="option"><input type="radio" name="mode" value="vm"><span class="option-copy"><span class="option-copy-title">VM 모드 (실험적)</span><small>바이트코드로 바꿔 실행합니다. 느려질 수 있고 Luau 타입 문법은 지원하지 않습니다.</small></span><span class="recommend">테스트 필수</span></label>
+            <label class="option"><input id="renameLocals" type="checkbox"><span class="option-copy"><span class="option-copy-title">최상위 지역 변수 이름 바꾸기</span><small>최상위 local 변수 이름을 무작위로 바꿉니다. 호환성 모드에서만 적용됩니다.</small></span><span class="recommend">필요 시 ON</span></label>
+          </div>
+          <button class="generate" id="generateButton" type="button">난독화 시작 <span aria-hidden="true">↗</span></button><p class="notice"><strong>참고:</strong> Target Version은 실행 환경에 맞게 고르세요. 엔진은 Lua와 Luau만 구분하며, 난독화는 역분석을 완전히 막지 못합니다. 원본은 따로 보관하세요.</p>
+        </section>
+      </aside>
+      <section class="window output" aria-label="난독화 결과"><div class="window-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="file-name">난독화</span><span class="output-actions"><button class="small-button" id="copyButton" type="button" disabled>복사</button><button class="small-button" id="downloadButton" type="button" disabled>다운로드</button></span></div><div class="output-body"><div class="output-empty" id="outputEmpty">난독화 결과가 여기에 표시됩니다.</div><textarea class="output-code" id="outputCode" aria-label="난독화 결과 코드" readonly hidden></textarea></div></section>
+    </section>
+  </main>
+  <footer class="shell footer">jinhyuk.xyz · Lua / Luau 작업공간 <span aria-hidden="true">·</span> <a href="index.html">홈으로</a></footer>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const source = $('sourceCode'), stats = $('sourceStats'), fileInput = $('fileInput'), fileName = $('fileName'),
+    languageLabel = $('languageLabel'), targetVersion = $('targetVersion'), toast = $('toast'), generate = $('generateButton'),
+    outputEmpty = $('outputEmpty'), outputCode = $('outputCode'), copyButton = $('copyButton'), downloadButton = $('downloadButton'),
+    renameLocals = $('renameLocals');
+  const modeInputs = [...document.querySelectorAll('input[name="mode"]')];
+  let toastTimer, result = null;
+  const notify = text => { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3200); };
+  const isLuau = () => targetVersion.value === 'luau';
+  const selectedMode = () => (modeInputs.find(input => input.checked)?.value === 'vm' ? 'vm' : 'compatibility');
+  const refresh = () => { const text = source.value; stats.textContent = `${text ? text.split(/\n/).length : 0} lines · ${text.length} chars`; };
+  const syncLanguage = () => { languageLabel.textContent = isLuau() ? 'LUAU' : 'LUA'; };
+  const setBusy = busy => { generate.disabled = busy; generate.firstChild.textContent = busy ? '난독화 중… ' : '난독화 시작 '; };
+
+  source.addEventListener('input', refresh);
+  targetVersion.addEventListener('change', syncLanguage);
+  $('clearButton').addEventListener('click', () => { source.value = ''; fileName.textContent = 'untitled.lua'; refresh(); source.focus(); });
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    source.value = await file.text();
+    fileName.textContent = file.name;
+    if (/\.luau$/i.test(file.name)) targetVersion.value = 'luau';
+    syncLanguage();
+    refresh();
+    notify(`${file.name} 파일을 불러왔습니다.`);
+    fileInput.value = '';
+  });
+
+  generate.addEventListener('click', async () => {
+    if (!source.value.trim()) { source.focus(); notify('먼저 Lua 또는 Luau 코드를 입력하거나 파일을 여세요.'); return; }
+    if (!targetVersion.value) { targetVersion.focus(); notify('실행 환경에 맞는 Target Version을 선택하세요.'); return; }
+    const mode = selectedMode();
+    setBusy(true);
+    try {
+      const response = await fetch('/api/obfuscate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: source.value, language: isLuau() ? 'luau' : 'lua', mode,
+          renameLocals: mode === 'compatibility' && renameLocals.checked })
+      });
+      let data = {};
+      try { data = await response.json(); } catch {}
+      if (!response.ok) throw Error(data.error || '난독화에 실패했습니다.');
+      result = { output: data.output, language: data.language };
+      outputCode.value = data.output;
+      outputCode.hidden = false;
+      outputEmpty.hidden = true;
+      copyButton.disabled = false;
+      downloadButton.disabled = false;
+      notify('난독화가 완료되었습니다. 실제 실행 환경에서 테스트하세요.');
+    } catch (error) {
+      notify('변환하지 못했습니다. ' + error.message);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  copyButton.addEventListener('click', async () => {
+    if (!result) return;
+    try { await navigator.clipboard.writeText(result.output); notify('결과를 복사했습니다.'); }
+    catch { outputCode.hidden = false; outputCode.select(); notify('복사하지 못했습니다. 직접 선택해 복사하세요.'); }
+  });
+  downloadButton.addEventListener('click', () => {
+    if (!result) return;
+    const base = (fileName.textContent || 'script').replace(/\.(lua|luau|txt)$/i, '') || 'script';
+    const url = URL.createObjectURL(new Blob([result.output], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${base}.obf.${result.language === 'luau' ? 'luau' : 'lua'}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  refresh();
+  syncLanguage();
+})();
+</script>
+</body>
+</html>

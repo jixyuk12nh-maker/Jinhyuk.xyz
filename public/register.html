@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#090b0e">
+<title>Create account — jinhyuk.xyz</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#080808;--edge:rgba(255,255,255,.3);--edge-soft:rgba(255,255,255,.16);--text:#f4f4f5;--muted:#9a9aa1;font-family:"DM Sans","Noto Sans KR",system-ui,sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:22px 14px 18px;color:var(--text);background:radial-gradient(ellipse 420px 320px at 18% 30%,rgba(255,255,255,.1),transparent 70%),radial-gradient(ellipse 380px 300px at 85% 70%,rgba(255,255,255,.06),transparent 72%),linear-gradient(145deg,#080808,#121212 55%,#080808);-webkit-font-smoothing:antialiased}
+button,input{font:inherit}
+a{color:inherit}
+:focus-visible{outline:2px solid rgba(255,255,255,.9);outline-offset:3px}
+
+.site-head,.card{width:min(100%,360px);border:1px solid var(--edge);background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 18px 44px rgba(0,0,0,.35)}
+.site-head{height:64px;padding:0 18px;display:flex;align-items:center;border-radius:15px;flex:none}
+.site-head a{display:flex;align-items:center;gap:11px;color:#f5f5f6;font:800 17px Manrope,"DM Sans",sans-serif;letter-spacing:.1px;text-decoration:none}
+.site-head-mark{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--edge-soft);border-radius:9px;background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.04));font-size:13px}
+
+.card{margin-top:14px;padding:20px;border-radius:17px;animation:enter .45s ease both}
+.card h1{margin:0 0 14px;font:700 19px/1.25 Manrope,"DM Sans",sans-serif;letter-spacing:-.4px}
+
+.socials{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.social-button{height:40px;min-width:0;padding:0 8px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--edge-soft);border-radius:10px;background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.035));color:#eef0f2;font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer;transition:background .18s,border-color .18s,transform .18s}
+.social-button:hover,.submit:hover{transform:translateY(-1px);border-color:rgba(255,255,255,.45);background:linear-gradient(135deg,rgba(255,255,255,.22),rgba(255,255,255,.06))}
+.social-icon{width:16px;height:16px;flex:none;display:grid;place-items:center}
+.google-mark{font:700 15px Arial,sans-serif;color:#fff}
+.discord-mark{width:17px;height:17px;color:#e6e6e6}
+
+.divider{display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--muted);font-size:11px}
+.divider:before,.divider:after{content:"";height:1px;flex:1;background:var(--edge-soft)}
+
+.field{margin-top:12px}
+.field label{display:block;margin-bottom:6px;color:#e4e4e7;font-size:11px;font-weight:600}
+.input-wrap{position:relative;width:100%}
+.input{display:block;width:100%;height:40px;padding:0 12px;border:1px solid var(--edge-soft);border-radius:9px;outline:none;background:rgba(0,0,0,.28);color:#f4f4f5;font-size:12px;transition:border-color .18s,box-shadow .18s}
+.input::placeholder{color:#6f6f76}
+.input:focus{border-color:rgba(255,255,255,.55);box-shadow:0 0 0 3px rgba(255,255,255,.07)}
+.password-input{padding-right:44px}
+.toggle-password{position:absolute;top:50%;right:5px;width:32px;height:32px;display:grid;place-items:center;transform:translateY(-50%);border:0;border-radius:7px;background:transparent;color:#a0a0a7;cursor:pointer}
+.toggle-password:hover{color:#fff;background:rgba(255,255,255,.07)}
+.toggle-password svg{width:17px;height:17px}
+
+.forgot-row{display:flex;justify-content:flex-end;margin-top:8px}
+.forgot-row a{color:#c9c9cf;font-size:10px;text-decoration:none}
+.forgot-row a:hover,.login a:hover,.terms a:hover{text-decoration:underline;text-underline-offset:3px}
+
+.terms{display:flex;align-items:flex-start;gap:8px;margin-top:12px;color:#b0b0b6;font-size:11px;line-height:1.6}
+.terms input{width:15px;height:15px;flex:none;margin:2px 0 0;accent-color:#ededed}
+.terms a{color:#f0f0f2;text-decoration:underline;text-decoration-color:rgba(255,255,255,.4);text-underline-offset:3px}
+
+.submit{display:block;width:100%;height:40px;margin-top:14px;border:1px solid rgba(255,255,255,.4);border-radius:10px;background:linear-gradient(135deg,rgba(255,255,255,.22),rgba(255,255,255,.05));color:#f8f8f8;font-size:12px;font-weight:700;cursor:pointer;transition:background .18s,transform .18s,border-color .18s}
+.submit:disabled{opacity:.55;cursor:wait;transform:none}
+
+.message{display:none;margin-top:12px;padding:9px 11px;border-radius:9px;font-size:11px;line-height:1.5}
+.message.show{display:block}
+.message.error{border:1px solid rgba(255,140,140,.3);background:rgba(160,50,50,.14);color:#f2b8b8}
+.message.success{border:1px solid rgba(200,240,215,.3);background:rgba(70,140,97,.14);color:#c4e8d0}
+
+.login{margin:14px 0 0;text-align:center;color:var(--muted);font-size:11px}
+.login a{margin-left:4px;color:#f0f0f2;font-weight:600;text-decoration:none}
+
+.legal-footer{margin-top:auto;padding-top:18px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:6px 14px;color:rgba(255,255,255,.5);font-size:10px;text-align:center}
+.legal-footer a{color:rgba(255,255,255,.78);text-decoration:none}
+.legal-footer a:hover{color:#fff;text-decoration:underline}
+.legal-footer .sep{color:rgba(255,255,255,.25)}
+
+@keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media(max-width:380px){.socials{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+.invite-row{display:flex;gap:7px}.invite-row .input{flex:1;min-width:0}.invite-get{height:40px;padding:0 11px;flex:none;border:1px solid var(--edge-soft);border-radius:9px;background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.035));color:#eee;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}.invite-get:disabled{opacity:.55;cursor:wait}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header class="site-head"><a href="/" aria-label="jinhyuk.xyz home"><span class="site-head-mark">J</span><span>jinhyuk.xyz</span></a></header>
+<main class="card">
+  <h1>Create account</h1>
+  <div class="socials">
+    <button class="social-button" type="button" data-provider="google"><span class="social-icon google-mark" aria-hidden="true">G</span><span>Continue with Google</span></button>
+    <button class="social-button" type="button" data-provider="discord"><svg class="discord-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.7 5.2a18.8 18.8 0 0 0-4.6-1.4l-.6 1.2a17 17 0 0 0-5 0l-.6-1.2a18.8 18.8 0 0 0-4.6 1.4C1.4 9.5.6 13.7 1 17.8a18.8 18.8 0 0 0 5.7 2.9l1.2-2a12 12 0 0 1-1.9-.9l.5-.4a13.5 13.5 0 0 0 11 0l.5.4-1.9.9 1.2 2a18.8 18.8 0 0 0 5.7-2.9c.5-4.8-.8-8.9-3.3-12.6ZM8.8 14.9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Zm6.4 0c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z"/></svg><span>Continue with Discord</span></button>
+  </div>
+  <div class="divider"><span>or</span></div>
+  <form id="registerForm" novalidate>
+    <div class="field"><label for="email">Email</label><input class="input" id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required></div>
+    <div class="field"><label for="password">Password</label><div class="input-wrap"><input class="input password-input" id="password" name="password" type="password" autocomplete="new-password" placeholder="At least 10 characters" minlength="10" required><button class="toggle-password" type="button" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.6"/></svg></button></div></div>
+    <div class="field"><label for="confirmPassword">Confirm password</label><div class="input-wrap"><input class="input password-input" id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" placeholder="Re-enter your password" minlength="10" required><button class="toggle-password" type="button" aria-label="Show confirmation password" aria-pressed="false" data-toggle-target="confirmPassword"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.6"/></svg></button></div></div>
+    <div class="field"><label for="inviteCode">Invite code</label><div class="invite-row"><input class="input" id="inviteCode" name="inviteCode" type="text" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX" required><button class="invite-get" id="getInvite" type="button">Get code</button></div></div>
+    <label class="terms"><input type="checkbox" id="agree" name="agree" required><span>I agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</span></label>
+    <div class="message" id="formMessage" role="status" aria-live="polite"></div>
+    <button class="submit" type="submit">Register</button>
+  </form>
+  <p class="login">Already have an account? <a href="login.html">Login</a></p>
+</main>
+<footer class="legal-footer" aria-label="Legal information"><a href="/privacy">Privacy Policy</a><span class="sep">·</span><a href="/terms">Terms of Service</a><span class="sep">·</span><span>© 2026 jinhyuk.xyz</span></footer>
+<script>
+(() => {
+  const form = document.querySelector('#registerForm'), message = document.querySelector('#formMessage'),
+    submit = form.querySelector('.submit'), password = document.querySelector('#password'),
+    confirm = document.querySelector('#confirmPassword'), invite = document.querySelector('#inviteCode'), getInvite = document.querySelector('#getInvite');
+  const show = (text, type = 'error') => { message.textContent = text; message.className = 'message show ' + type; };
+  async function request(path, options = {}) {
+    const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { 'Content-Type': 'application/json' } });
+    let data = {};
+    try { data = await response.json(); } catch {}
+    if (!response.ok) throw Error(data.error || 'The request could not be completed. Please try again.');
+    return data;
+  }
+  document.querySelectorAll('.toggle-password').forEach(button => button.addEventListener('click', () => {
+    const target = button.dataset.toggleTarget ? document.getElementById(button.dataset.toggleTarget) : password;
+    const visible = target.type === 'password';
+    target.type = visible ? 'text' : 'password';
+    button.setAttribute('aria-pressed', String(visible));
+    button.setAttribute('aria-label', (visible ? 'Hide ' : 'Show ') + (target === password ? 'password' : 'confirmation password'));
+  }));
+  document.querySelectorAll('[data-provider]').forEach(button => button.addEventListener('click', () =>
+    show(button.dataset.provider === 'google' ? 'Google sign-up is not connected yet.' : 'Discord sign-up is not connected yet.')));
+  getInvite.addEventListener('click', async () => {
+    getInvite.disabled = true;
+    try {
+      const data = await request('/api/invites', { method: 'POST' });
+      invite.value = data.code;
+      show('Invite code issued. It is valid for 1 hour and can be used once.', 'success');
+    } catch (error) {
+      show(error.message);
+    } finally {
+      getInvite.disabled = false;
+    }
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    message.className = 'message';
+    if (!form.reportValidity()) return;
+    if (password.value !== confirm.value) { show('Passwords do not match.'); confirm.focus(); return; }
+    if (!document.querySelector('#agree').checked) { show('Please agree to the Terms of Service and Privacy Policy.'); return; }
+    submit.disabled = true;
+    submit.textContent = 'Creating account…';
+    try {
+      await request('/api/auth/signup', { method: 'POST', body: JSON.stringify({
+        email: form.email.value.trim(), password: password.value, inviteCode: invite.value }) });
+      show('Account created. Taking you to your dashboard…', 'success');
+      location.href = '/dashboard';
+    } catch (error) {
+      show(error.message);
+      submit.disabled = false;
+      submit.textContent = 'Register';
+    }
+  });
+})();
+</script>
+</body>
+</html>

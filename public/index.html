@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090909">
+  <meta name="description" content="Lua와 Luau 스크립트 작업을 한곳에서 정리하고 관리하는 jinhyuk.xyz 작업공간">
+  <title>jinhyuk.xyz — Lua 작업공간</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+:root{color-scheme:dark;--bg:#080808;--edge:rgba(255,255,255,.3);--edge-soft:rgba(255,255,255,.16);--line:rgba(255,255,255,.13);--text:#f4f4f5;--muted:#a0a0a6;--dim:#77777e;--page:1120px;font-family:Manrope,"Noto Sans KR",system-ui,sans-serif}
+*{box-sizing:border-box}
+html{min-width:320px;scroll-behavior:smooth}
+body{min-height:100vh;margin:0;color:var(--text);overflow-x:hidden;background:radial-gradient(ellipse 560px 420px at 17% 12%,rgba(255,255,255,.105),transparent 70%),radial-gradient(ellipse 520px 420px at 90% 48%,rgba(205,210,218,.065),transparent 72%),linear-gradient(145deg,#080808,#101012 54%,#080808);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.15;background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:58px 58px;mask-image:linear-gradient(to bottom,#000,transparent 76%)}
+a{color:inherit;text-decoration:none}
+button{color:inherit;font:inherit;cursor:pointer}
+:focus-visible{outline:2px solid #fff;outline-offset:3px}
+
+.shell{width:min(var(--page),calc(100% - 44px));margin-inline:auto}
+.top-wrap{position:sticky;top:12px;z-index:10;padding-top:14px}
+.topbar{position:relative;height:64px;padding:0 13px 0 17px;display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--edge);border-radius:15px;background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 18px 46px rgba(0,0,0,.34)}
+.brand{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:800;letter-spacing:.1px;white-space:nowrap}
+.brand-mark{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--edge-soft);border-radius:9px;background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.04));box-shadow:inset 0 1px rgba(255,255,255,.25);font-size:13px}
+.brand-name span{color:var(--muted)}
+.nav{display:flex;align-items:center;gap:4px}
+.nav a{padding:9px 11px;border-radius:9px;color:#a8a8ae;font-size:11px;transition:background .18s,color .18s}
+.nav a:hover{color:#fff;background:rgba(255,255,255,.08)}
+.nav-actions{display:flex;align-items:center;gap:7px}
+.menu-toggle{display:none;width:36px;height:36px;place-items:center;border:1px solid var(--edge-soft);border-radius:9px;background:rgba(255,255,255,.05);cursor:pointer}
+
+.button{height:38px;padding:0 13px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--edge-soft);border-radius:10px;background:linear-gradient(135deg,rgba(255,255,255,.13),rgba(255,255,255,.035));color:#eee;font-size:11px;font-weight:650;box-shadow:inset 0 1px rgba(255,255,255,.17);transition:transform .18s,background .18s,border-color .18s}
+.button:hover{transform:translateY(-1px);border-color:rgba(255,255,255,.45);background:linear-gradient(135deg,rgba(255,255,255,.22),rgba(255,255,255,.06))}
+.button.primary{color:#111;border-color:#f1f1f1;background:linear-gradient(115deg,#fff,#d9d9dc);box-shadow:0 6px 22px rgba(255,255,255,.08)}
+.button.primary:hover{background:#e4e4e5;border-color:#fff}
+
+.hero{min-height:600px;padding:90px 0 72px;display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);align-items:center;gap:48px}
+.hero-copy{animation:rise .7s both}
+.eyebrow{margin:0 0 20px;display:inline-flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.045);color:#c7c7ca;font:9px "DM Mono",monospace;letter-spacing:1.1px}
+.live-dot{width:6px;height:6px;border-radius:50%;background:#eee;box-shadow:0 0 12px rgba(255,255,255,.6)}
+h1{max-width:620px;margin:0;font-size:clamp(43px,6.4vw,72px);line-height:1.08;letter-spacing:-3.8px;font-weight:700}
+h1 span{display:block;color:#a7a7ad}
+.hero-lead{max-width:470px;margin:19px 0 0;color:#aaaab0;font-size:13px;line-height:1.9}
+.hero-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:24px}
+.hero-actions .button{height:43px;padding:0 16px;font-size:12px}
+.hero-footnote{margin:13px 0 0;color:#76767c;font-size:10px}
+
+.preview-wrap{position:relative;animation:rise .8s .12s both}
+.glow{position:absolute;inset:12% 3%;z-index:-1;border-radius:50%;background:rgba(230,230,235,.1);filter:blur(55px)}
+.preview{overflow:hidden;border:1px solid var(--edge);border-radius:18px;background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px rgba(255,255,255,.22),0 28px 82px rgba(0,0,0,.46)}
+.preview-bar{height:43px;padding:0 13px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--edge-soft);background:rgba(255,255,255,.025)}
+.window-dot{width:7px;height:7px;border-radius:50%;background:#666}
+.window-dot:first-child{background:#ddd}
+.window-dot:nth-child(2){background:#999}
+.preview-path{margin-left:8px;color:#9b9ba1;font:9px "DM Mono",monospace}
+.preview-state{margin-left:auto;color:#bcbcc1;font:8px "DM Mono",monospace}
+.preview-body{padding:17px}
+.preview-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;color:#96969c;font:9px "DM Mono",monospace}
+.preview-heading strong{color:#eee;font-weight:500}
+.preview-title{margin:16px 0 12px;font-size:14px;font-weight:650}
+.preview-list{display:grid;gap:8px}
+.preview-item,.code-card,.principle,.feature{border:1px solid var(--edge-soft);border-radius:12px;background:linear-gradient(135deg,rgba(255,255,255,.075),rgba(255,255,255,.02)),rgba(10,10,11,.22);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.preview-item{min-height:48px;padding:9px 10px;display:flex;align-items:center;gap:10px}
+.item-icon{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid var(--edge-soft);border-radius:8px;color:#ddd;font:10px "DM Mono",monospace}
+.item-copy{min-width:0;flex:1}
+.item-copy strong{display:block;overflow:hidden;color:#e4e4e7;font-size:10px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.item-copy small{display:block;margin-top:4px;color:#818188;font:8px "DM Mono",monospace}
+.item-status{color:#bcbcc1;font:8px "DM Mono",monospace}
+.code-card{margin-top:11px;padding:11px 12px;background:rgba(0,0,0,.25)}
+.code-top{display:flex;justify-content:space-between;color:#85858c;font:8px "DM Mono",monospace}
+.code-lines{margin-top:10px;display:grid;gap:6px;color:#c7c7cc;font:9px/1.4 "DM Mono",monospace}
+.code-lines .muted{color:#77777e}
+.code-lines .bright{color:#eee}
+
+.principles{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;padding:0 0 78px}
+.principle{min-height:115px;padding:17px}
+.principle-num{color:#8e8e95;font:9px "DM Mono",monospace;letter-spacing:.8px}
+.principle h2{margin:13px 0 6px;font-size:12px;letter-spacing:-.2px}
+.principle p{margin:0;color:#96969d;font-size:10px;line-height:1.7}
+
+.section{padding:0 0 78px}
+.section-head{margin-bottom:17px;display:flex;justify-content:space-between;align-items:flex-end;gap:18px}
+.section-label{margin:0 0 7px;color:#b7b7be;font:9px "DM Mono",monospace;letter-spacing:1.4px}
+.section-head h2{margin:0;font-size:clamp(22px,3vw,30px);letter-spacing:-1.1px}
+.section-head p{max-width:390px;margin:0;color:#96969d;font-size:11px;line-height:1.75}
+.feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}
+.feature{min-height:154px;padding:17px;transition:transform .18s,border-color .18s}
+.feature:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.4)}
+.feature-icon{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--edge-soft);border-radius:9px;background:rgba(255,255,255,.07);color:#eee;font:10px "DM Mono",monospace}
+.feature h3{margin:15px 0 6px;font-size:12px}
+.feature p{margin:0;color:#96969d;font-size:10px;line-height:1.75}
+
+.closing{margin:0 0 54px;padding:clamp(20px,4vw,34px);display:flex;justify-content:space-between;align-items:center;gap:22px;border:1px solid var(--edge);border-radius:16px;background:linear-gradient(125deg,rgba(255,255,255,.17),rgba(255,255,255,.03) 44%,rgba(225,225,225,.08)),rgba(22,22,23,.45);-webkit-backdrop-filter:blur(22px) saturate(140%);backdrop-filter:blur(22px) saturate(140%);box-shadow:inset 0 1px rgba(255,255,255,.2),0 20px 55px rgba(0,0,0,.32)}
+.closing-label{margin:0 0 7px;color:#aaaab1;font:8px "DM Mono",monospace;letter-spacing:1.4px}
+.closing h2{margin:0;font-size:clamp(18px,3vw,25px);letter-spacing:-.8px}
+.closing p:last-child{margin:7px 0 0;color:#99999f;font-size:10px}
+
+.footer{min-height:62px;padding:17px 0 23px;display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);color:#77777e;font-size:9px}
+.footer-links{display:flex;gap:14px}
+.footer a:hover{color:#ddd}
+
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@media (max-width:800px){
+  .hero{min-height:auto;padding:78px 0 52px;grid-template-columns:1fr;gap:33px}
+  .hero-copy{max-width:660px}
+  .preview-wrap{width:min(100%,620px);margin-inline:auto}
+  .principles{padding-bottom:60px}
+}
+@media (max-width:620px){
+  .shell{width:calc(100% - 30px)}
+  .top-wrap{top:7px;padding-top:8px}
+  .topbar{height:56px;padding:0 9px 0 11px;gap:8px}
+  .brand{font-size:15px}
+  .brand-mark{width:30px;height:30px}
+  .menu-toggle{display:grid}
+  .nav{position:absolute;top:calc(100% + 7px);left:0;right:0;padding:7px;display:none;align-items:stretch;flex-direction:column;border:1px solid var(--edge);border-radius:12px;background:rgba(18,18,19,.96);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px)}
+  .nav.open{display:flex}
+  .nav a{padding:11px}
+  .nav-actions{margin-left:auto}
+  .nav-actions .button{height:34px;padding:0 9px;font-size:10px}
+  .hero{padding:60px 0 40px;gap:27px}
+  .eyebrow{margin-bottom:16px;font-size:8px}
+  h1{font-size:clamp(39px,11.4vw,56px);line-height:1.12;letter-spacing:-2.5px}
+  .hero-lead{margin-top:13px;font-size:11px}
+  .hero-actions{margin-top:18px}
+  .hero-actions .button{height:40px;padding:0 13px;font-size:11px}
+  .hero-footnote{font-size:9px}
+  .preview-body{padding:12px}
+  .preview-title{font-size:12px}
+  .preview-item{min-height:44px}
+  .principles{grid-template-columns:1fr;gap:8px;padding-bottom:48px}
+  .principle{min-height:0;padding:13px}
+  .principle h2{margin-top:8px}
+  .section{padding-bottom:50px}
+  .section-head{align-items:flex-start;flex-direction:column;gap:7px}
+  .section-head h2{font-size:21px}
+  .feature-grid{grid-template-columns:1fr;gap:8px}
+  .feature{min-height:0;padding:14px}
+  .feature h3{margin-top:10px}
+  .closing{margin-bottom:38px;align-items:flex-start;flex-direction:column}
+  .closing .button{width:100%}
+  .footer{align-items:flex-start;flex-direction:column}
+  .footer-links{flex-wrap:wrap}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+  <div class="shell top-wrap">
+    <header class="topbar">
+      <a class="brand" href="#home" aria-label="jinhyuk.xyz 홈으로">
+        <span class="brand-mark" aria-hidden="true">J</span><span class="brand-name">jinhyuk<span>.xyz</span></span>
+      </a>
+      <button class="menu-toggle" id="menuToggle" type="button" aria-label="메뉴 열기" aria-expanded="false" aria-controls="mainNav">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+      <nav class="nav" id="mainNav" aria-label="주요 메뉴">
+        <a href="#features">기능</a><a href="#workspace">작업공간</a><a href="#start">시작하기</a><a href="obfuscator.html">난독화기</a>
+      </nav>
+      <div class="nav-actions"><a class="button" href="login.html">로그인</a><a class="button primary" href="register.html">회원가입 <span aria-hidden="true">↗</span></a></div>
+    </header>
+  </div>
+
+  <main class="shell" id="home">
+    <section class="hero" aria-labelledby="heroTitle">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> LUA / LUAU PERSONAL WORKSPACE</p>
+        <h1 id="heroTitle">스크립트 작업,<span>한곳에서 깔끔하게.</span></h1>
+        <p class="hero-lead">Lua와 Luau 작업에 필요한 파일, 제품, 접근 키를 하나의 개인 작업공간에서 정리해 보세요. 복잡한 메뉴 대신 필요한 흐름만 간결하게 담았습니다.</p>
+        <div class="hero-actions"><a class="button primary" href="register.html">작업공간 만들기 <span aria-hidden="true">↗</span></a><a class="button" href="login.html">로그인</a><a class="button" href="obfuscator.html">난독화기 써보기</a></div>
+        <p class="hero-footnote">계정을 만들고 나만의 작업 흐름을 시작하세요.</p>
+      </div>
+      <div class="preview-wrap" id="workspace" aria-label="작업공간 미리보기">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="preview">
+          <div class="preview-bar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><span class="preview-path">jinhyuk.xyz / workspace</span><span class="preview-state">미리보기</span></div>
+          <div class="preview-body">
+            <div class="preview-heading"><span>개인 작업공간</span><strong>OVERVIEW</strong></div>
+            <div class="preview-title">작업에 필요한 것들을 한곳에</div>
+            <div class="preview-list">
+              <div class="preview-item"><span class="item-icon">LU</span><span class="item-copy"><strong>내 Lua 업로드</strong><small>개인 파일과 로더 관리</small></span><span class="item-status">파일</span></div>
+              <div class="preview-item"><span class="item-icon">◇</span><span class="item-copy"><strong>제품 라이브러리</strong><small>구매한 스크립트 확인</small></span><span class="item-status">제품</span></div>
+              <div class="preview-item"><span class="item-icon">KEY</span><span class="item-copy"><strong>API 키 관리</strong><small>접근 정보를 한곳에서</small></span><span class="item-status">계정</span></div>
+            </div>
+            <div class="code-card"><div class="code-top"><span>sample.lua</span><span>LUAC</span></div><div class="code-lines"><span class="muted">-- 나만의 작업공간</span><span><span class="bright">local</span> workspace = <span class="bright">"jinhyuk.xyz"</span></span><span>workspace:organize(<span class="bright">"Lua / Luau"</span>)</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="principles" aria-label="서비스 특징">
+      <article class="principle"><span class="principle-num">01 / 정리</span><h2>작업을 한 흐름으로</h2><p>업로드한 파일과 제품 정보를 작업공간에서 구분해 살펴봅니다.</p></article>
+      <article class="principle"><span class="principle-num">02 / 개인 공간</span><h2>내 계정으로 관리</h2><p>계정에 연결된 작업과 접근 정보를 한곳에서 확인합니다.</p></article>
+      <article class="principle"><span class="principle-num">03 / 간결함</span><h2>필요한 화면만</h2><p>복잡한 설정을 줄이고 작업에 집중할 수 있도록 구성했습니다.</p></article>
+    </section>
+
+    <section class="section" id="features" aria-labelledby="featuresTitle">
+      <div class="section-head"><div><p class="section-label">WORKSPACE FEATURES</p><h2 id="featuresTitle">작업 흐름을 단순하게.</h2></div><p>파일을 정리하고, 제품을 확인하고, 계정 접근 정보를 관리하는 기본 기능을 담았습니다.</p></div>
+      <div class="feature-grid">
+        <article class="feature"><span class="feature-icon" aria-hidden="true">01</span><h3>내 스크립트</h3><p>직접 업로드한 Lua/Luau 파일과 로더 정보를 개인 공간에서 정리합니다.</p></article>
+        <article class="feature"><span class="feature-icon" aria-hidden="true">02</span><h3>제품 라이브러리</h3><p>스토어 제품과 구매 관련 정보를 개인 업로드와 분리해 확인합니다.</p></article>
+        <article class="feature"><span class="feature-icon" aria-hidden="true">03</span><h3>계정과 API 키</h3><p>회원 계정에 연결된 접근 키와 관련 정보를 한 화면에서 살펴봅니다.</p></article>
+      </div>
+    </section>
+
+    <section class="closing" id="start" aria-labelledby="startTitle">
+      <div><p class="closing-label">YOUR WORKSPACE STARTS HERE</p><h2 id="startTitle">다음 작업을 시작할 준비가 되셨나요?</h2><p>회원가입 후 개인 작업공간을 확인해 보세요.</p></div>
+      <a class="button primary" href="register.html">회원가입 <span aria-hidden="true">↗</span></a>
+    </section>
+  </main>
+
+  <footer class="shell footer"><span>jinhyuk.xyz · Lua / Luau 작업공간</span><nav class="footer-links" aria-label="계정 메뉴"><a href="login.html">로그인</a><a href="register.html">회원가입</a></nav></footer>
+  <script>
+    (() => {
+      const button = document.getElementById('menuToggle');
+      const nav = document.getElementById('mainNav');
+      button.addEventListener('click', () => {
+        const open = nav.classList.toggle('open');
+        button.setAttribute('aria-expanded', String(open));
+        button.setAttribute('aria-label', open ? '메뉴 닫기' : '메뉴 열기');
+      });
+      nav.addEventListener('click', event => {
+        if (event.target.closest('a')) {
+          nav.classList.remove('open');
+          button.setAttribute('aria-expanded', 'false');
+          button.setAttribute('aria-label', '메뉴 열기');
+        }
+      });
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 620) {
+          nav.classList.remove('open');
+          button.setAttribute('aria-expanded', 'false');
+          button.setAttribute('aria-label', '메뉴 열기');
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
