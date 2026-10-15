@@ -52,11 +52,15 @@
       <div class="editor-head"><label for="source">Or paste source code</label><span id="char-count">0 characters</span></div>
       <textarea id="source" spellcheck="false" placeholder="Paste an authorized Luraph-protected Lua/Luau script here..."></textarea>
 
+      <div id="engine-notice" class="engine-notice" role="status" aria-live="polite">
+        <strong>Recovery engine unavailable</strong>
+        <span>The Worker is online, but no compatible recovery engine is connected. Analysis is disabled until the engine is installed and verified.</span>
+      </div>
       <div class="action-row">
         <div class="auth-field"><label for="access-key">Access key</label><input id="access-key" type="password" autocomplete="off" placeholder="Your site access key"></div>
-        <button id="run" class="primary-button"><span>Analyze script</span><span class="button-arrow">↗</span></button>
+        <button id="run" class="primary-button" disabled><span>Engine unavailable</span><span class="button-arrow">↗</span></button>
       </div>
-      <p class="fine-print">Only analyze scripts you own or are authorized to inspect. The result may be partial and should be reviewed before use.</p>
+      <p class="fine-print">Only analyze scripts you own or are authorized to inspect. Do not submit sensitive source code to a service you do not control.</p>
     </section>
 
     <section id="result-section" class="workspace result-workspace" hidden>

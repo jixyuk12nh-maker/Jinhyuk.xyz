@@ -16,9 +16,32 @@
   const log = $("#engine-log");
   let downloadName = "recovered.lua";
   const MAX_BYTES = 2 * 1024 * 1024;
+  const engineNotice = $("#engine-notice");
+
+  async function checkEngineStatus() {
+    try {
+      const response = await fetch(`${API_BASE}/health`, { headers: { accept: "application/json" }, cache: "no-store" });
+      const health = await response.json();
+      if (response.ok && health.engineReady === true) {
+        run.disabled = false;
+        run.querySelector("span:first-child").textContent = "Analyze script";
+        engineNotice.classList.add("ready");
+        engineNotice.innerHTML = "<strong>Recovery engine ready</strong><span>The API reports that a recovery engine is available. Results should still be reviewed.</span>";
+        return;
+      }
+      run.disabled = true;
+      run.querySelector("span:first-child").textContent = "Engine unavailable";
+      engineNotice.innerHTML = "<strong>Recovery engine unavailable</strong><span>The Worker is online, but no compatible recovery engine is connected. Analysis is disabled until the engine is installed and verified.</span>";
+    } catch {
+      run.disabled = true;
+      run.querySelector("span:first-child").textContent = "API unavailable";
+      engineNotice.innerHTML = "<strong>API status could not be checked</strong><span>Check the Worker deployment and try refreshing this page.</span>";
+    }
+  }
 
   function updateCount() { count.textContent = `${sourceInput.value.length.toLocaleString()} characters`; }
   sourceInput.addEventListener("input", updateCount);
+  checkEngineStatus();
 
   async function loadFile(file) {
     if (!file) return;
@@ -52,6 +75,7 @@
   }
 
   run.addEventListener("click", async () => {
+    if (run.disabled) return;
     const source = sourceInput.value;
     const accessKey = $("#access-key").value.trim();
     if (!source.trim()) { showResult("error", "Lua/Luau 소스를 입력하거나 파일을 선택해 주세요."); return; }
