@@ -13,6 +13,18 @@ const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 const PBKDF2_ITERATIONS = 100000;
 const SESSION_MS = 14 * 86400000;
 const MAX_SESSIONS_PER_ACCOUNT = 10;
+// 메인화면에서 자동 생성하는 초대 코드: 1회용, 1시간 뒤 만료, IP당 1시간에 5개, 전체 미사용 코드는 500개까지.
+const INVITE_TTL_MS = 3600000;
+const MAX_INVITES_PER_IP = 5;
+const MAX_ACTIVE_INVITES = 500;
+// 관리자가 만드는 코드: 7일 유효, 동시에 100개까지. 방문 기록은 90일 보관.
+const ADMIN_INVITE_TTL_MS = 7 * 86400000;
+const MAX_ADMIN_INVITES = 100;
+const VISIT_RETENTION_DAYS = 90;
+const ROLES = new Set(["user", "admin"]);
+const ROLE_LABEL = { user: "일반", admin: "관리자" };
+// 헷갈리는 글자(I, L, O, 0, 1)를 뺀 31자. 12자리면 약 59비트라 추측이 불가능합니다.
+const INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const FAIL_WINDOW_MS = 15 * 60_000;
 const MAX_FAILS_PER_IP = 5;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -75,6 +87,18 @@ function safeEqual(a, b) {
   for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] || 0) ^ (y[i] || 0);
   return diff === 0;
 }
+function generateInviteCode() {
+  const limit = 256 - (256 % INVITE_ALPHABET.length); // 편향 없이 뽑기 위해 나머지 구간은 버립니다.
+  let out = "";
+  while (out.length < 12) {
+    for (const b of crypto.getRandomValues(new Uint8Array(24))) {
+      if (b < limit && out.length < 12) out += INVITE_ALPHABET[b % INVITE_ALPHABET.length];
+    }
+  }
+  return `${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8)}`;
+}
+// 사람이 입력할 때 생기는 대소문자·공백·하이픈 차이를 없앱니다.
+const normalizeInvite = (value) => String(value ?? "").toUpperCase().replace(/[\s-]/g, "");
 function cookieValue(request, name) {
   for (const part of (request.headers.get("Cookie") || "").split(";")) {
     const i = part.indexOf("=");
@@ -100,16 +124,24 @@ function addFailure(ip) {
 const tooMany = () => json({ error: "실패 횟수가 너무 많습니다. 15분 후 다시 시도하세요." }, 429, { "Retry-After": "900" });
 
 const SCHEMA = [
-  "CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'user')",
   "CREATE TABLE IF NOT EXISTS account_sessions (token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS account_sessions_account_idx ON account_sessions(account_id)",
-  "CREATE INDEX IF NOT EXISTS account_sessions_expiry_idx ON account_sessions(expires_at)"
+  "CREATE INDEX IF NOT EXISTS account_sessions_expiry_idx ON account_sessions(expires_at)",
+  "CREATE TABLE IF NOT EXISTS signup_codes (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', created_by TEXT, ip_hash TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_by TEXT, used_at INTEGER)",
+  "CREATE INDEX IF NOT EXISTS signup_codes_ip_idx ON signup_codes(ip_hash, created_at)",
+  "CREATE TABLE IF NOT EXISTS visits (day TEXT NOT NULL, visitor TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (day, visitor))"
 ];
+// role 열이 없는 예전 accounts 테이블에는 열을 덧붙입니다(기존 계정은 모두 일반 권한이 됩니다).
+async function addRoleColumn(db) {
+  try { await db.prepare("ALTER TABLE accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'user'").run(); }
+  catch (e) { if (!/duplicate column/i.test(String(e?.message))) throw e; }
+}
 const schemaReady = new WeakMap();
 function ensureSchema(db) {
   let p = schemaReady.get(db);
   if (!p) {
-    p = db.batch(SCHEMA.map((sql) => db.prepare(sql))).catch((e) => { schemaReady.delete(db); throw e; });
+    p = db.batch(SCHEMA.map((sql) => db.prepare(sql))).then(() => addRoleColumn(db)).catch((e) => { schemaReady.delete(db); throw e; });
     schemaReady.set(db, p);
   }
   return p;
@@ -125,7 +157,7 @@ async function currentAccount(request, env) {
   const token = cookieValue(request, "lm_session");
   if (!token || !env.DB) return null;
   const db = await getDb(env);
-  return await db.prepare("SELECT accounts.id AS id, accounts.email AS email FROM account_sessions JOIN accounts ON accounts.id=account_sessions.account_id WHERE account_sessions.token_hash=? AND account_sessions.expires_at>? LIMIT 1").bind(await sha256(token), Date.now()).first();
+  return await db.prepare("SELECT accounts.id AS id, accounts.email AS email, accounts.role AS role FROM account_sessions JOIN accounts ON accounts.id=account_sessions.account_id WHERE account_sessions.token_hash=? AND account_sessions.expires_at>? LIMIT 1").bind(await sha256(token), Date.now()).first();
 }
 async function startSession(db, accountId) {
   const token = randomToken(), now = Date.now();
@@ -134,6 +166,22 @@ async function startSession(db, accountId) {
     await db.prepare("DELETE FROM account_sessions WHERE account_id=? AND (expires_at<? OR token_hash NOT IN (SELECT token_hash FROM account_sessions WHERE account_id=? ORDER BY created_at DESC LIMIT ?))").bind(accountId, now, accountId, MAX_SESSIONS_PER_ACCOUNT).run();
   } catch (e) { console.error("session cleanup failed:", e?.message); }
   return token;
+}
+async function requireAdmin(request, env) {
+  const account = await currentAccount(request, env);
+  if (!account) throw new HttpError(401, "로그인이 필요합니다.");
+  if (account.role !== "admin") throw new HttpError(403, "관리자만 사용할 수 있습니다.");
+  return account;
+}
+// 방문 기록은 한국 시간 기준 날짜로 센다. IP 원문은 저장하지 않고 날짜가 섞인 해시만 남긴다.
+const kstDay = (ms = Date.now()) => new Date(ms + 9 * 3600000).toISOString().slice(0, 10);
+const VISIT_PATHS = new Set(["/", "/index.html", "/auth", "/auth.html", "/obfuscator.html", "/engine.html"]);
+async function trackVisit(request, env) {
+  if (!env.DB) return;
+  try {
+    const db = await getDb(env), day = kstDay();
+    await db.prepare("INSERT INTO visits (day,visitor,hits) VALUES (?,?,1) ON CONFLICT(day,visitor) DO UPDATE SET hits=hits+1").bind(day, await sha256(`visitor:${day}:${clientIp(request)}`)).run();
+  } catch (e) { console.error("visit tracking failed:", e?.message); }
 }
 async function credentials(request) {
   let data;
@@ -151,7 +199,7 @@ async function api(request, env, url) {
   if (path === "/api/health" && method === "GET") {
     let schema = false;
     if (env.DB) { try { await ensureSchema(env.DB); schema = true; } catch (e) { console.error("health: schema setup failed:", e?.message); } }
-    return json({ ok: true, service: "jinhyuk.xyz", database: Boolean(env.DB), schema, inviteCodeSet: Boolean(String(env.INVITE_CODE || "").trim()) });
+    return json({ ok: true, service: "jinhyuk.xyz", database: Boolean(env.DB), schema, inviteCodeSet: Boolean(String(env.INVITE_CODE || "").trim()), adminCodeSet: Boolean(String(env.ADMIN_INVITE_CODE || "").trim()) });
   }
 
   if (path === "/api/auth/signup" && method === "POST") {
@@ -160,20 +208,35 @@ async function api(request, env, url) {
     const { email, password, invite } = await credentials(request);
     if (!validEmail(email)) return json({ error: "올바른 이메일 주소를 입력하세요." }, 400);
     if (password.length < 10 || password.length > 200) return json({ error: "비밀번호는 10~200자여야 합니다." }, 400);
-    const expected = String(env.INVITE_CODE || "").trim();
-    if (!expected) return json({ error: "가입이 아직 열려 있지 않습니다. 서버에 INVITE_CODE가 설정되지 않았습니다." }, 503);
-    if (!safeEqual(invite, expected)) { addFailure(ip); return json({ error: "초대 코드가 올바르지 않습니다." }, 403); }
+    // 초대 코드: (1) 서버에 설정한 고정 코드 ADMIN_INVITE_CODE(관리자 권한) / INVITE_CODE(일반 권한), (2) 자동 생성한 1회용 코드(만들 때 정한 권한).
+    const adminMaster = String(env.ADMIN_INVITE_CODE || "").trim(), master = String(env.INVITE_CODE || "").trim();
+    let role = "user", codeHash = null;
+    if (adminMaster && safeEqual(invite, adminMaster)) role = "admin";
+    else if (!(master && safeEqual(invite, master))) {
+      const hash = await sha256(normalizeInvite(invite));
+      const live = invite ? await db.prepare("SELECT role FROM signup_codes WHERE code_hash=? AND used_at IS NULL AND expires_at>? LIMIT 1").bind(hash, Date.now()).first() : null;
+      if (!live) { addFailure(ip); return json({ error: "초대 코드가 올바르지 않거나 이미 사용·만료되었습니다." }, 403); }
+      role = ROLES.has(live.role) ? live.role : "user";
+      codeHash = hash;
+    }
     const taken = () => json({ error: "이미 가입된 이메일입니다." }, 409);
     if (await db.prepare("SELECT id FROM accounts WHERE email=? LIMIT 1").bind(email).first()) return taken();
     const { salt, hash } = await passwordHash(password), id = crypto.randomUUID();
+    if (codeHash) {
+      // 동시에 같은 코드를 쓰려는 가입을 막기 위해 "아직 안 쓴 코드"일 때만 한 번에 선점합니다.
+      const claim = await db.prepare("UPDATE signup_codes SET used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL AND expires_at>?").bind(id, Date.now(), codeHash, Date.now()).run();
+      if (claim?.meta?.changes !== 1) { addFailure(ip); return json({ error: "초대 코드가 올바르지 않거나 이미 사용·만료되었습니다." }, 403); }
+    }
     try {
-      await db.prepare("INSERT INTO accounts (id,email,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)").bind(id, email, salt, hash, Date.now()).run();
+      await db.prepare("INSERT INTO accounts (id,email,password_salt,password_hash,created_at,role) VALUES (?,?,?,?,?,?)").bind(id, email, salt, hash, Date.now(), role).run();
     } catch (e) {
+      // 가입이 실패했으면 코드를 다시 쓸 수 있게 돌려놓습니다.
+      if (codeHash) { try { await db.prepare("UPDATE signup_codes SET used_by=NULL, used_at=NULL WHERE code_hash=? AND used_by=?").bind(codeHash, id).run(); } catch (e2) { console.error("invite release failed:", e2?.message); } }
       if (/UNIQUE|constraint/i.test(String(e?.message))) return taken();
       throw e;
     }
     const token = await startSession(db, id);
-    return json({ ok: true, user: { id, email } }, 201, { "Set-Cookie": sessionCookie(token) });
+    return json({ ok: true, user: { id, email, role } }, 201, { "Set-Cookie": sessionCookie(token) });
   }
 
   if (path === "/api/auth/login" && method === "POST") {
@@ -198,7 +261,63 @@ async function api(request, env, url) {
 
   if (path === "/api/me" && method === "GET") {
     const account = await currentAccount(request, env);
-    return account ? json({ authenticated: true, id: account.id, email: account.email }) : json({ authenticated: false }, 401);
+    return account ? json({ authenticated: true, id: account.id, email: account.email, role: account.role }) : json({ authenticated: false }, 401);
+  }
+
+  // 메인화면의 "초대 코드 받기" 버튼이 부르는 API입니다. 로그인 없이 쓸 수 있고, 남용은 IP당 횟수 제한으로 막습니다.
+  if (path === "/api/invites" && method === "POST") {
+    const db = await getDb(env), now = Date.now();
+    const ipHash = await sha256("invite:" + clientIp(request));
+    const recent = await db.prepare("SELECT COUNT(*) AS n FROM signup_codes WHERE ip_hash=? AND created_at>?").bind(ipHash, now - INVITE_TTL_MS).first();
+    if (Number(recent?.n || 0) >= MAX_INVITES_PER_IP) return json({ error: "초대 코드를 너무 많이 받았습니다. 1시간 뒤에 다시 시도하세요." }, 429, { "Retry-After": "3600" });
+    try { await db.prepare("DELETE FROM signup_codes WHERE expires_at<?").bind(now - 86400000).run(); } catch (e) { console.error("invite cleanup failed:", e?.message); }
+    const active = await db.prepare("SELECT COUNT(*) AS n FROM signup_codes WHERE created_by IS NULL AND used_at IS NULL AND expires_at>?").bind(now).first();
+    if (Number(active?.n || 0) >= MAX_ACTIVE_INVITES) return json({ error: "지금은 초대 코드를 만들 수 없습니다. 잠시 후 다시 시도하세요." }, 503);
+    const code = generateInviteCode(), expiresAt = now + INVITE_TTL_MS;
+    // 로그인 없이 받는 코드는 항상 "일반" 권한입니다(요청에 무엇을 담아 보내도 무시). 코드 원문은 저장하지 않고 해시만 저장합니다.
+    await db.prepare("INSERT INTO signup_codes (id,code_hash,hint,role,created_by,ip_hash,created_at,expires_at) VALUES (?,?,?,'user',NULL,?,?,?)").bind(crypto.randomUUID(), await sha256(normalizeInvite(code)), code.slice(-4), ipHash, now, expiresAt).run();
+    return json({ ok: true, code, role: "user", expiresAt }, 201);
+  }
+
+  // ---- 관리자 전용 ----
+  if (path === "/api/admin/invites" && (method === "GET" || method === "POST")) {
+    const admin = await requireAdmin(request, env), db = await getDb(env), now = Date.now();
+    if (method === "POST") {
+      let data; try { data = await bodyJson(request, 2000); } catch (e) { return json({ error: e.message }, 400); }
+      const role = data.role === undefined ? "user" : data.role;
+      if (!ROLES.has(role)) return json({ error: "권한은 일반(user) 또는 관리자(admin)여야 합니다." }, 400);
+      const active = await db.prepare("SELECT COUNT(*) AS n FROM signup_codes WHERE created_by IS NOT NULL AND used_at IS NULL AND expires_at>?").bind(now).first();
+      if (Number(active?.n || 0) >= MAX_ADMIN_INVITES) return json({ error: `사용하지 않은 코드는 최대 ${MAX_ADMIN_INVITES}개까지 만들 수 있습니다. 쓰지 않는 코드를 삭제하세요.` }, 429);
+      const code = generateInviteCode(), id = crypto.randomUUID(), expiresAt = now + ADMIN_INVITE_TTL_MS;
+      await db.prepare("INSERT INTO signup_codes (id,code_hash,hint,role,created_by,ip_hash,created_at,expires_at) VALUES (?,?,?,?,?,NULL,?,?)").bind(id, await sha256(normalizeInvite(code)), code.slice(-4), role, admin.id, now, expiresAt).run();
+      return json({ ok: true, id, code, role, expiresAt }, 201);
+    }
+    const { results } = await db.prepare("SELECT signup_codes.id AS id, signup_codes.hint AS hint, signup_codes.role AS role, signup_codes.created_at AS createdAt, signup_codes.expires_at AS expiresAt, signup_codes.used_at AS usedAt, accounts.email AS usedEmail FROM signup_codes LEFT JOIN accounts ON accounts.id=signup_codes.used_by WHERE signup_codes.created_by IS NOT NULL ORDER BY signup_codes.created_at DESC LIMIT 50").all();
+    return json({ invites: results.map((r) => ({ ...r, status: r.usedAt ? "used" : r.expiresAt > now ? "active" : "expired" })) });
+  }
+
+  const inviteDelete = path.match(/^\/api\/admin\/invites\/([0-9a-f-]{36})$/);
+  if (inviteDelete && method === "DELETE") {
+    await requireAdmin(request, env);
+    const res = await (await getDb(env)).prepare("DELETE FROM signup_codes WHERE id=? AND created_by IS NOT NULL AND used_at IS NULL").bind(inviteDelete[1]).run();
+    return res?.meta?.changes === 1 ? json({ ok: true }) : json({ error: "삭제할 수 있는 초대 코드를 찾지 못했습니다. 이미 사용된 코드는 삭제되지 않습니다." }, 404);
+  }
+
+  if (path === "/api/admin/overview" && method === "GET") {
+    await requireAdmin(request, env);
+    const db = await getDb(env), now = Date.now(), today = kstDay(now);
+    try { await db.prepare("DELETE FROM visits WHERE day<?").bind(kstDay(now - VISIT_RETENTION_DAYS * 86400000)).run(); } catch (e) { console.error("visit cleanup failed:", e?.message); }
+    const since = kstDay(now - 6 * 86400000);
+    const { results: rows } = await db.prepare("SELECT day, COUNT(*) AS unique_visitors, SUM(hits) AS visits FROM visits WHERE day>=? GROUP BY day").bind(since).all();
+    const byDay = Object.fromEntries(rows.map((r) => [r.day, r]));
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const day = kstDay(now - i * 86400000), r = byDay[day];
+      days.push({ day, visits: Number(r?.visits || 0), uniqueVisitors: Number(r?.unique_visitors || 0) });
+    }
+    const { results: members } = await db.prepare("SELECT email, role, created_at AS createdAt FROM accounts ORDER BY created_at DESC LIMIT 200").all();
+    const count = await db.prepare("SELECT COUNT(*) AS n FROM accounts").first();
+    return json({ today: days[0], days, members, memberCount: Number(count?.n || 0) });
   }
 
   if (path === "/api/obfuscate" && method === "POST") {
@@ -238,6 +357,7 @@ function withSecurityHeaders(response) {
 
 // 서버가 직접 접근을 막는 페이지 (로그인하지 않으면 /auth 로 보냅니다).
 const DASHBOARD_PATHS = new Set(["/dashboard", "/dashboard/", "/dashboard.html"]);
+const ADMIN_PATHS = new Set(["/admin", "/admin/", "/admin.html"]);
 const AUTH_PATHS = new Set(["/auth", "/auth/", "/auth.html"]);
 const redirect = (to) => new Response(null, { status: 302, headers: { Location: to, "Cache-Control": "no-store" } });
 async function accountOrNull(request, env) {
@@ -245,10 +365,23 @@ async function accountOrNull(request, env) {
   catch (e) { console.error("session lookup failed:", e?.message); return null; }
 }
 
-async function handle(request, env) {
+async function handle(request, env, ctx) {
   const url = new URL(request.url), path = url.pathname;
   if (path.startsWith("/api/")) return api(request, env, url);
   const isRead = request.method === "GET" || request.method === "HEAD";
+  if (request.method === "GET" && VISIT_PATHS.has(path)) {
+    const tracked = trackVisit(request, env);
+    if (ctx?.waitUntil) ctx.waitUntil(tracked); else await tracked;
+  }
+  if (isRead && ADMIN_PATHS.has(path)) {
+    const account = await accountOrNull(request, env);
+    if (!account) return redirect("/auth");
+    if (account.role !== "admin") return redirect("/dashboard");
+    const asset = await env.ASSETS.fetch(request);
+    const page = new Response(asset.body, asset);
+    page.headers.set("Cache-Control", "private, no-store");
+    return page;
+  }
   if (isRead && DASHBOARD_PATHS.has(path)) {
     if (!(await accountOrNull(request, env))) return redirect("/auth");
     const asset = await env.ASSETS.fetch(request);
@@ -261,8 +394,8 @@ async function handle(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
-    try { return withSecurityHeaders(await handle(request, env)); }
+  async fetch(request, env, ctx) {
+    try { return withSecurityHeaders(await handle(request, env, ctx)); }
     catch (e) {
       if (e instanceof HttpError) return withSecurityHeaders(new URL(request.url).pathname.startsWith("/api/") ? json({ error: e.message }, e.status) : new Response(e.message, { status: e.status, headers: PLAIN }));
       console.error("Unhandled error:", e);
