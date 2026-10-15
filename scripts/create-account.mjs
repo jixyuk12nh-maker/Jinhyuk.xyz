@@ -9,7 +9,7 @@ import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 
-const DB_NAME = "jinhyuk.xyz";
+const DB_NAME = "jinhyuk_xyz";
 const ITERATIONS = 100000; // src/index.js 의 PBKDF2_ITERATIONS 와 반드시 같아야 로그인됩니다.
 const ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
