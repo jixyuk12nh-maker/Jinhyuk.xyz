@@ -1,0 +1,8 @@
+{
+  "name": "lua-restore-worker-only",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check public/app.js && node --test tests/*.test.js"
+  }
+}
